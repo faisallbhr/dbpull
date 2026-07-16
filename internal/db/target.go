@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -13,13 +14,31 @@ import (
 )
 
 type TargetClient struct {
-	db    execPinger
-	close func() error
+	session  targetSession
+	closeDB  func() error
+	closeSes func() error
+
+	originalSQLMode          string
+	foreignKeyChecksDisabled bool
+	syncPrepared             bool
 }
 
-type execPinger interface {
+type targetSession interface {
 	PingContext(ctx context.Context) error
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) targetScanner
+}
+
+type targetScanner interface {
+	Scan(dest ...any) error
+}
+
+type sqlTargetSession struct {
+	*sql.Conn
+}
+
+func (s sqlTargetSession) QueryRowContext(ctx context.Context, query string, args ...any) targetScanner {
+	return s.Conn.QueryRowContext(ctx, query, args...)
 }
 
 func ConnectTarget(cfg config.TargetConfig) (*TargetClient, error) {
@@ -33,23 +52,75 @@ func ConnectTarget(cfg config.TargetConfig) (*TargetClient, error) {
 		return nil, fmt.Errorf("open target database: %w", err)
 	}
 
+	session, err := db.Conn(context.Background())
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open target database session: %w", err)
+	}
+
 	return &TargetClient{
-		db:    db,
-		close: db.Close,
+		session:  sqlTargetSession{Conn: session},
+		closeDB:  db.Close,
+		closeSes: session.Close,
 	}, nil
 }
 
 func (c *TargetClient) Close() error {
-	if c.close == nil {
-		return nil
+	var err error
+
+	if c.syncPrepared {
+		if restoreErr := c.restoreSyncSession(context.Background()); restoreErr != nil {
+			err = restoreErr
+		}
 	}
-	return c.close()
+
+	if c.closeSes != nil {
+		if closeErr := c.closeSes(); closeErr != nil {
+			err = errorsJoin(err, fmt.Errorf("close target database session: %w", closeErr))
+		}
+	}
+
+	if c.closeDB != nil {
+		if closeErr := c.closeDB(); closeErr != nil {
+			err = errorsJoin(err, fmt.Errorf("close target database: %w", closeErr))
+		}
+	}
+
+	return err
 }
 
 func (c *TargetClient) Ping(ctx context.Context) error {
-	if err := c.db.PingContext(ctx); err != nil {
+	if err := c.session.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping target database: %w", err)
 	}
+	return nil
+}
+
+func (c *TargetClient) PrepareSyncSession(ctx context.Context) error {
+	if c.syncPrepared {
+		return nil
+	}
+
+	mode, err := c.currentSQLMode(ctx)
+	if err != nil {
+		return fmt.Errorf("read target sql_mode: %w", err)
+	}
+
+	if err := c.setSQLMode(ctx, addSQLMode(mode, "NO_AUTO_VALUE_ON_ZERO")); err != nil {
+		return fmt.Errorf("enable NO_AUTO_VALUE_ON_ZERO: %w", err)
+	}
+
+	c.originalSQLMode = mode
+	if err := c.DisableForeignKeyChecks(ctx); err != nil {
+		restoreErr := c.setSQLMode(ctx, mode)
+		if restoreErr != nil {
+			return errorsJoin(err, fmt.Errorf("restore target sql_mode: %w", restoreErr))
+		}
+		return err
+	}
+
+	c.foreignKeyChecksDisabled = true
+	c.syncPrepared = true
 	return nil
 }
 
@@ -106,7 +177,7 @@ func (c *TargetClient) InsertBatch(ctx context.Context, table string, batch RowB
 		strings.Join(placeholders, ", "),
 	)
 
-	if _, err := c.db.ExecContext(ctx, query, args...); err != nil {
+	if _, err := c.session.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf(
 			"insert batch into %q for rows %d-%d and columns (%s): %w",
 			table,
@@ -118,6 +189,24 @@ func (c *TargetClient) InsertBatch(ctx context.Context, table string, batch RowB
 	}
 
 	return nil
+}
+
+func (c *TargetClient) restoreSyncSession(ctx context.Context) error {
+	var err error
+
+	if c.foreignKeyChecksDisabled {
+		if restoreErr := c.EnableForeignKeyChecks(ctx); restoreErr != nil {
+			err = restoreErr
+		}
+		c.foreignKeyChecksDisabled = false
+	}
+
+	if restoreErr := c.setSQLMode(ctx, c.originalSQLMode); restoreErr != nil {
+		err = errorsJoin(err, fmt.Errorf("restore target sql_mode: %w", restoreErr))
+	}
+
+	c.syncPrepared = false
+	return err
 }
 
 func buildTargetDSN(cfg config.TargetConfig) (string, error) {
@@ -144,10 +233,48 @@ func buildTargetDSN(cfg config.TargetConfig) (string, error) {
 }
 
 func (c *TargetClient) exec(ctx context.Context, action, query string) error {
-	if _, err := c.db.ExecContext(ctx, query); err != nil {
+	if _, err := c.session.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("%s: %w", action, err)
 	}
 	return nil
+}
+
+func (c *TargetClient) currentSQLMode(ctx context.Context) (string, error) {
+	var mode string
+	if err := c.session.QueryRowContext(ctx, "SELECT @@SESSION.sql_mode").Scan(&mode); err != nil {
+		return "", err
+	}
+	return mode, nil
+}
+
+func (c *TargetClient) setSQLMode(ctx context.Context, mode string) error {
+	if _, err := c.session.ExecContext(ctx, "SET SESSION sql_mode = ?", mode); err != nil {
+		return err
+	}
+	return nil
+}
+
+func addSQLMode(mode, required string) string {
+	parts := strings.Split(mode, ",")
+	for _, part := range parts {
+		if strings.TrimSpace(part) == required {
+			return mode
+		}
+	}
+	if strings.TrimSpace(mode) == "" {
+		return required
+	}
+	return mode + "," + required
+}
+
+func errorsJoin(current, next error) error {
+	if current == nil {
+		return next
+	}
+	if next == nil {
+		return current
+	}
+	return errors.Join(current, next)
 }
 
 func quoteIdentifiers(names []string) string {

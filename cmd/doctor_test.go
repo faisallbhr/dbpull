@@ -150,11 +150,7 @@ func (doctorTargetStub) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (doctorTargetStub) DisableForeignKeyChecks(ctx context.Context) error {
-	return nil
-}
-
-func (doctorTargetStub) EnableForeignKeyChecks(ctx context.Context) error {
+func (doctorTargetStub) PrepareSyncSession(ctx context.Context) error {
 	return nil
 }
 

@@ -27,7 +27,7 @@ func newSyncCmd() *cobra.Command {
 	return cmd
 }
 
-func runSync(cmd *cobra.Command, args []string, verbose bool) error {
+func runSync(cmd *cobra.Command, args []string, verbose bool) (err error) {
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
@@ -38,15 +38,33 @@ func runSync(cmd *cobra.Command, args []string, verbose bool) error {
 	if err := renderer.Start(); err != nil {
 		return err
 	}
+	defer func() {
+		if err == nil {
+			err = renderer.Close()
+			if err != nil {
+				err = fmt.Errorf("close sync progress: %w", err)
+			}
+			return
+		}
+
+		if errors.Is(err, context.Canceled) {
+			err = joinSyncError(err, renderer.Cancel(err))
+			return
+		}
+
+		err = joinSyncError(err, renderer.Failure(err))
+	}()
 
 	if err := renderer.StartPhase(terminal.PhaseSSH); err != nil {
 		return err
 	}
 	tunnel := newTunnel(cfg.SSH, defaultSourceDBAddr)
 	if err := tunnel.Open(ctx); err != nil {
-		return finishSyncError(renderer, fmt.Errorf("open ssh tunnel: %w", err))
+		return fmt.Errorf("open ssh tunnel: %w", err)
 	}
-	defer tunnel.Close()
+	defer func() {
+		err = joinSyncError(err, tunnel.Close())
+	}()
 	if err := renderer.CompletePhase(terminal.PhaseSSH); err != nil {
 		return err
 	}
@@ -56,11 +74,13 @@ func runSync(cmd *cobra.Command, args []string, verbose bool) error {
 	}
 	sourceClient, err := connectSource(cfg.Source, tunnel.LocalAddress())
 	if err != nil {
-		return finishSyncError(renderer, fmt.Errorf("connect source database: %w", err))
+		return fmt.Errorf("connect source database: %w", err)
 	}
-	defer sourceClient.Close()
+	defer func() {
+		err = joinSyncError(err, sourceClient.Close())
+	}()
 	if err := sourceClient.Ping(ctx); err != nil {
-		return finishSyncError(renderer, err)
+		return err
 	}
 	if err := renderer.CompletePhase(terminal.PhaseSource); err != nil {
 		return err
@@ -71,11 +91,13 @@ func runSync(cmd *cobra.Command, args []string, verbose bool) error {
 	}
 	targetClient, err := connectTarget(cfg.Target)
 	if err != nil {
-		return finishSyncError(renderer, fmt.Errorf("connect target database: %w", err))
+		return fmt.Errorf("connect target database: %w", err)
 	}
-	defer targetClient.Close()
+	defer func() {
+		err = joinSyncError(err, targetClient.Close())
+	}()
 	if err := targetClient.Ping(ctx); err != nil {
-		return finishSyncError(renderer, err)
+		return err
 	}
 	if err := renderer.CompletePhase(terminal.PhaseTarget); err != nil {
 		return err
@@ -86,7 +108,7 @@ func runSync(cmd *cobra.Command, args []string, verbose bool) error {
 	}
 	plan, err := newPlanner(cfg, sourceClient).Build(ctx, args)
 	if err != nil {
-		return finishSyncError(renderer, err)
+		return err
 	}
 	if err := renderer.SetPlan(plan); err != nil {
 		return err
@@ -95,21 +117,15 @@ func runSync(cmd *cobra.Command, args []string, verbose bool) error {
 		return err
 	}
 
-	if err := targetClient.DisableForeignKeyChecks(ctx); err != nil {
-		return finishSyncError(renderer, fmt.Errorf("disable foreign key checks: %w", err))
+	if err := targetClient.PrepareSyncSession(ctx); err != nil {
+		return fmt.Errorf("prepare target sync session: %w", err)
 	}
-	fkChecksDisabled := true
-	defer func() {
-		if fkChecksDisabled {
-			_ = targetClient.EnableForeignKeyChecks(ctx)
-		}
-	}()
 
 	if err := renderer.StartPhase(terminal.PhaseSchema); err != nil {
 		return err
 	}
 	if err := newSchemaSyncer(sourceClient, targetClient).Sync(ctx, plan); err != nil {
-		return finishSyncError(renderer, err)
+		return err
 	}
 	if err := renderer.CompletePhase(terminal.PhaseSchema); err != nil {
 		return err
@@ -130,36 +146,24 @@ func runSync(cmd *cobra.Command, args []string, verbose bool) error {
 		if renderErr != nil {
 			err = errors.Join(err, fmt.Errorf("render sync progress: %w", renderErr))
 		}
-		return finishSyncError(renderer, err)
-	}
-	if renderErr != nil {
-		return finishSyncError(renderer, fmt.Errorf("render sync progress: %w", renderErr))
-	}
-
-	if err := targetClient.EnableForeignKeyChecks(ctx); err != nil {
-		return finishSyncError(renderer, fmt.Errorf("enable foreign key checks: %w", err))
-	}
-	fkChecksDisabled = false
-	if err := renderer.CompletePhase(terminal.PhaseData); err != nil {
 		return err
 	}
-	if err := renderer.Close(); err != nil {
-		return fmt.Errorf("close sync progress: %w", err)
+	if renderErr != nil {
+		return fmt.Errorf("render sync progress: %w", renderErr)
+	}
+	if err := renderer.CompletePhase(terminal.PhaseData); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func finishSyncError(renderer *terminal.SyncProgressRenderer, err error) error {
-	var finalErr error
-	if errors.Is(err, context.Canceled) {
-		finalErr = renderer.Cancel(err)
-	} else {
-		finalErr = renderer.Failure(err)
+func joinSyncError(current, next error) error {
+	if next == nil {
+		return current
 	}
-
-	if finalErr != nil && !errors.Is(finalErr, err) {
-		return errors.Join(err, finalErr)
+	if current == nil {
+		return next
 	}
-	return finalErr
+	return errors.Join(current, next)
 }

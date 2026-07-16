@@ -132,10 +132,12 @@ Responsibility:
 
 - connect to source MariaDB through an existing tunnel
 - connect to target MariaDB directly
+- hold one dedicated target SQL session for synchronization
 - list base tables
 - fetch `SHOW CREATE TABLE`
 - stream source rows in batches
 - insert target batches
+- manage session-level `sql_mode`
 - disable and re-enable `FOREIGN_KEY_CHECKS`
 
 Why:
@@ -375,10 +377,10 @@ On load or save:
 3. connect source DB
 4. connect target DB
 5. build plan
-6. disable `FOREIGN_KEY_CHECKS`
+6. prepare target sync session
 7. recreate schema for all planned tables
 8. copy data for non-`exclude_data` tables
-9. re-enable `FOREIGN_KEY_CHECKS`
+9. restore target session settings
 10. close progress renderer
 
 ### `dbpull list-tables`
@@ -477,6 +479,8 @@ sequenceDiagram
     CLI->>TargetDB: connect + ping
     CLI->>Planner: build plan
     Planner-->>CLI: SyncPlan
+    CLI->>TargetDB: read @@SESSION.sql_mode
+    CLI->>TargetDB: enable NO_AUTO_VALUE_ON_ZERO
     CLI->>TargetDB: SET FOREIGN_KEY_CHECKS = 0
     CLI->>Schema: sync schema
     Schema->>SourceDB: SHOW CREATE TABLE
@@ -486,6 +490,7 @@ sequenceDiagram
     Data->>TargetDB: insert batch
     Data->>Terminal: emit progress
     CLI->>TargetDB: SET FOREIGN_KEY_CHECKS = 1
+    CLI->>TargetDB: restore original sql_mode
     CLI->>Terminal: close renderer
     CLI->>TargetDB: close
     CLI->>SourceDB: close
@@ -587,11 +592,13 @@ sequenceDiagram
 
 - built directly from local target config
 - destructive write path
+- one dedicated SQL connection is opened and reused for sync
 - used for:
   - `DROP TABLE`
   - `CREATE TABLE`
   - batch inserts
   - FK check toggling
+  - session `sql_mode` management
 
 ### Connection policy
 
@@ -617,6 +624,17 @@ For each planned table:
 - it remains disabled through the data phase
 - it is re-enabled after data sync finishes
 - a deferred safeguard attempts restoration even on failure
+
+### Dedicated target session
+
+Schema sync and data sync share the same dedicated target SQL session.
+
+This matters because session settings such as:
+
+- `FOREIGN_KEY_CHECKS`
+- `sql_mode`
+
+must stay consistent for every `DROP TABLE`, `CREATE TABLE`, and `INSERT`.
 
 ### Why this approach
 
@@ -660,6 +678,7 @@ effectiveBatchSize >= 1
 
 During row scan and insert:
 
+- explicit `0` values in `AUTO_INCREMENT` columns stay `0`
 - SQL `NULL` stays `nil`
 - empty string stays empty string
 - empty `[]byte{}` stays a non-nil empty byte slice
@@ -668,6 +687,32 @@ During row scan and insert:
 - `false` / tinyint zero stays zero
 - date and time values rely on the MySQL driver with `ParseTime=true`
 - Unicode text is passed through without normalization
+
+### SQL mode handling
+
+Before schema or data changes begin on the target session:
+
+- read the current session `sql_mode`
+- add `NO_AUTO_VALUE_ON_ZERO` if it is not already enabled
+- preserve all other existing SQL modes
+
+After synchronization ends, whether it succeeds, fails, or is cancelled:
+
+- restore `FOREIGN_KEY_CHECKS`
+- restore the original session `sql_mode`
+- close the dedicated session
+
+### Why `NO_AUTO_VALUE_ON_ZERO` is required
+
+MariaDB normally treats explicit `0` inserted into an `AUTO_INCREMENT` column as a request for the next generated value.
+
+That behavior breaks synchronization fidelity because:
+
+- a source row with primary key `0` stops being `0` on the target
+- any foreign key referencing `0` can become invalid
+- the synchronized database is no longer identical to the source
+
+DBPull therefore enables `NO_AUTO_VALUE_ON_ZERO` for the sync session so explicit zero values are preserved exactly as stored in the source database.
 
 ### Failure policy
 
@@ -777,10 +822,11 @@ Cleanup is local and `defer`-based.
 Resources are closed in reverse acquisition order:
 
 1. renderer
-2. target FK restoration attempt
-3. target DB
-4. source DB
-5. SSH tunnel
+2. target session restoration attempt
+3. target DB session
+4. target DB handle
+5. source DB
+6. SSH tunnel
 
 ### Guarantees
 
@@ -790,6 +836,7 @@ Even on failure or cancellation:
 - source DB close is attempted
 - target DB close is attempted
 - FK restoration is attempted if checks were disabled
+- original target `sql_mode` is restored if it was changed
 - renderer is finalized cleanly
 
 ### Why this approach

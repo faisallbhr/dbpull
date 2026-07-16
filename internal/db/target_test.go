@@ -35,7 +35,7 @@ func TestBuildTargetDSN(t *testing.T) {
 
 func TestTargetPing(t *testing.T) {
 	client := &TargetClient{
-		db: fakeTargetDB{
+		session: fakeTargetSession{
 			ping: func(context.Context) error { return nil },
 		},
 	}
@@ -49,7 +49,7 @@ func TestTargetSchemaMethods(t *testing.T) {
 	var queries []string
 
 	client := &TargetClient{
-		db: fakeTargetDB{
+		session: fakeTargetSession{
 			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
 				queries = append(queries, query)
 				return fakeResult{}, nil
@@ -91,7 +91,7 @@ func TestInsertBatch(t *testing.T) {
 	var gotArgs []any
 
 	client := &TargetClient{
-		db: fakeTargetDB{
+		session: fakeTargetSession{
 			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
 				gotQuery = query
 				gotArgs = append([]any(nil), args...)
@@ -126,7 +126,7 @@ func TestInsertBatchPreservesEmptyBytesAndNil(t *testing.T) {
 	var gotArgs []any
 
 	client := &TargetClient{
-		db: fakeTargetDB{
+		session: fakeTargetSession{
 			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
 				gotArgs = append([]any(nil), args...)
 				return fakeResult{}, nil
@@ -181,7 +181,7 @@ func TestInsertBatchReturnsRowContextOnMismatch(t *testing.T) {
 func TestInsertBatchReturnsSafeExecContext(t *testing.T) {
 	wantErr := errors.New("boom")
 	client := &TargetClient{
-		db: fakeTargetDB{
+		session: fakeTargetSession{
 			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
 				return nil, wantErr
 			},
@@ -207,23 +207,185 @@ func TestInsertBatchReturnsSafeExecContext(t *testing.T) {
 	}
 }
 
-type fakeTargetDB struct {
-	ping func(context.Context) error
-	exec func(context.Context, string, ...any) (sql.Result, error)
+func TestInsertBatchPreservesExplicitZeroValues(t *testing.T) {
+	var gotArgs []any
+
+	client := &TargetClient{
+		session: fakeTargetSession{
+			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
+				gotArgs = append([]any(nil), args...)
+				return fakeResult{}, nil
+			},
+		},
+	}
+
+	err := client.InsertBatch(context.Background(), "gate_users", RowBatch{
+		Columns: []string{"id", "created_by"},
+		Rows: [][]any{
+			{int64(0), int64(0)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("InsertBatch() error = %v", err)
+	}
+
+	want := []any{int64(0), int64(0)}
+	if !reflect.DeepEqual(gotArgs, want) {
+		t.Fatalf("args = %#v, want %#v", gotArgs, want)
+	}
 }
 
-func (p fakeTargetDB) PingContext(ctx context.Context) error {
+func TestPrepareSyncSessionSetsModeAndDisablesForeignKeys(t *testing.T) {
+	var queries []string
+	var argsList [][]any
+
+	client := &TargetClient{
+		session: fakeTargetSession{
+			queryRow: func(ctx context.Context, query string, args ...any) targetScanner {
+				return fakeTargetScanner{
+					scan: func(dest ...any) error {
+						*dest[0].(*string) = "STRICT_TRANS_TABLES"
+						return nil
+					},
+				}
+			},
+			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
+				queries = append(queries, query)
+				argsList = append(argsList, append([]any(nil), args...))
+				return fakeResult{}, nil
+			},
+		},
+	}
+
+	if err := client.PrepareSyncSession(context.Background()); err != nil {
+		t.Fatalf("PrepareSyncSession() error = %v", err)
+	}
+
+	wantQueries := []string{
+		"SET SESSION sql_mode = ?",
+		"SET FOREIGN_KEY_CHECKS = 0",
+	}
+	if !reflect.DeepEqual(queries, wantQueries) {
+		t.Fatalf("queries = %#v, want %#v", queries, wantQueries)
+	}
+	if got := argsList[0][0]; got != "STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO" {
+		t.Fatalf("sql_mode arg = %#v", got)
+	}
+}
+
+func TestPrepareSyncSessionDoesNotDuplicateNoAutoValueOnZero(t *testing.T) {
+	var modeArg any
+
+	client := &TargetClient{
+		session: fakeTargetSession{
+			queryRow: func(ctx context.Context, query string, args ...any) targetScanner {
+				return fakeTargetScanner{
+					scan: func(dest ...any) error {
+						*dest[0].(*string) = "STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO"
+						return nil
+					},
+				}
+			},
+			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
+				if query == "SET SESSION sql_mode = ?" {
+					modeArg = args[0]
+				}
+				return fakeResult{}, nil
+			},
+		},
+	}
+
+	if err := client.PrepareSyncSession(context.Background()); err != nil {
+		t.Fatalf("PrepareSyncSession() error = %v", err)
+	}
+
+	if modeArg != "STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO" {
+		t.Fatalf("modeArg = %#v", modeArg)
+	}
+}
+
+func TestCloseRestoresForeignKeysAndSQLMode(t *testing.T) {
+	var queries []string
+	var argsList [][]any
+	sessionClosed := false
+	dbClosed := false
+
+	client := &TargetClient{
+		session: fakeTargetSession{
+			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
+				queries = append(queries, query)
+				argsList = append(argsList, append([]any(nil), args...))
+				return fakeResult{}, nil
+			},
+		},
+		closeSes: func() error {
+			sessionClosed = true
+			return nil
+		},
+		closeDB: func() error {
+			dbClosed = true
+			return nil
+		},
+		originalSQLMode:          "STRICT_TRANS_TABLES",
+		foreignKeyChecksDisabled: true,
+		syncPrepared:             true,
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	wantQueries := []string{
+		"SET FOREIGN_KEY_CHECKS = 1",
+		"SET SESSION sql_mode = ?",
+	}
+	if !reflect.DeepEqual(queries, wantQueries) {
+		t.Fatalf("queries = %#v, want %#v", queries, wantQueries)
+	}
+	if got := argsList[1][0]; got != "STRICT_TRANS_TABLES" {
+		t.Fatalf("restore sql_mode arg = %#v", got)
+	}
+	if !sessionClosed || !dbClosed {
+		t.Fatalf("sessionClosed = %v, dbClosed = %v", sessionClosed, dbClosed)
+	}
+}
+
+type fakeTargetSession struct {
+	ping     func(context.Context) error
+	exec     func(context.Context, string, ...any) (sql.Result, error)
+	queryRow func(context.Context, string, ...any) targetScanner
+}
+
+func (p fakeTargetSession) PingContext(ctx context.Context) error {
 	if p.ping != nil {
 		return p.ping(ctx)
 	}
 	return nil
 }
 
-func (p fakeTargetDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+func (p fakeTargetSession) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	if p.exec != nil {
 		return p.exec(ctx, query, args...)
 	}
 	return fakeResult{}, nil
+}
+
+func (p fakeTargetSession) QueryRowContext(ctx context.Context, query string, args ...any) targetScanner {
+	if p.queryRow != nil {
+		return p.queryRow(ctx, query, args...)
+	}
+	return fakeTargetScanner{}
+}
+
+type fakeTargetScanner struct {
+	scan func(dest ...any) error
+}
+
+func (s fakeTargetScanner) Scan(dest ...any) error {
+	if s.scan != nil {
+		return s.scan(dest...)
+	}
+	return nil
 }
 
 type fakeResult struct{}
