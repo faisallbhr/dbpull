@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 
+	"dbpull/internal/buildinfo"
+
 	"github.com/spf13/cobra"
 )
 
@@ -12,7 +14,7 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print the DBPull version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), version)
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), buildinfo.Summary())
 			return err
 		},
 	}

@@ -5,7 +5,6 @@ import "github.com/spf13/cobra"
 const appName = "dbpull"
 const defaultConfigPath = "dbpull.yml"
 
-var version = "dev"
 var configPath = defaultConfigPath
 
 func NewRootCmd() *cobra.Command {

@@ -1,4 +1,5 @@
 dbpull
+dist/
 dbpull.yml
 
 *.out

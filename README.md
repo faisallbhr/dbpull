@@ -1,36 +1,89 @@
 # DBPull
 
-Refresh a local MariaDB database from a remote source database over SSH.
+> Refresh your local MariaDB database from a remote source database over SSH with one command.
 
-DBPull is a small CLI for developers who want a repeatable way to rebuild a local database from a source database. It opens the SSH tunnel, rebuilds table schema, copies data, and shows progress in one command.
+## Overview
+
+DBPull is a Go CLI for developers who need a fast way to rebuild a local MariaDB database from a remote source database. It handles the SSH tunnel, recreates table schema, copies data, and shows progress in a single workflow.
 
 ## Features
 
-- Interactive setup with `dbpull init`
+- Connects to a remote source MariaDB database through SSH
+- Rebuilds target tables with `DROP + CREATE + INSERT`
+- Synchronizes base tables only
+- Supports full table exclusion with `exclude_tables`
+- Supports schema-only tables with `exclude_data`
+- Interactive configuration with `dbpull init`
 - Interactive config editing with `dbpull config`
 - Environment checks with `dbpull doctor`
 - Dry-run planning with `dbpull plan`
-- Full sync with `DROP + CREATE + INSERT`
-- Base-table-only sync for MariaDB
-- Table filtering with `exclude_tables` and `exclude_data`
-- Progress output with tables copied, speed, elapsed time, and ETA
-- Sync only selected tables when needed
+- Single-binary builds for Linux, macOS, and Windows
+
+## Why DBPull?
+
+Refreshing a local database often looks like this:
+
+- open an SSH tunnel
+- export the source database
+- move the dump around
+- import it locally
+- repeat when the data changes
+
+DBPull reduces that to a small, repeatable CLI workflow:
+
+- configure once
+- verify access
+- preview the plan
+- run the sync
+
+## How It Works
+
+```text
+Remote Source MariaDB
+        │
+        ▼
+     SSH Tunnel
+        │
+        ▼
+      DBPull
+        │
+        ▼
+ Local Target MariaDB
+```
+
+DBPull reads schema and data from the source database, then rebuilds the configured target database locally.
 
 ## Installation
 
-Build locally:
+For published versions, GitHub Releases should be the preferred installation method.
+
+### Linux
+
+Download the matching release artifact for your CPU architecture, extract it, and place `dbpull` somewhere in your `PATH`.
+
+### macOS
+
+Download the matching release artifact for your CPU architecture, extract it, and place `dbpull` somewhere in your `PATH`.
+
+### Windows
+
+Download the Windows release archive, extract it, and place `dbpull.exe` in a directory on your `PATH`.
+
+### Build From Source
+
+Build the current platform:
 
 ```bash
-go build -o dbpull .
+make build
 ```
 
-Install to your Go bin directory:
+Or build directly with Go:
 
 ```bash
-go install .
+CGO_ENABLED=0 go build -trimpath -buildvcs=false -o dbpull .
 ```
 
-Check that the CLI is available:
+Check the installed binary:
 
 ```bash
 dbpull version
@@ -44,10 +97,16 @@ Initialize configuration:
 dbpull init
 ```
 
-Verify SSH access and both databases:
+Verify SSH access and database connectivity:
 
 ```bash
 dbpull doctor
+```
+
+Preview what will be synchronized:
+
+```bash
+dbpull plan
 ```
 
 Run the synchronization:
@@ -56,15 +115,29 @@ Run the synchronization:
 dbpull sync
 ```
 
-If you want to review the plan first:
+Synchronize only selected tables when needed:
 
 ```bash
-dbpull plan
+dbpull sync users products orders
 ```
 
 ## Configuration
 
-DBPull stores its configuration in `dbpull.yml`.
+DBPull reads configuration from `dbpull.yml`.
+
+The file contains four sections:
+
+- `source`: the remote source database to read from
+- `ssh`: the SSH connection used to reach the source database
+- `target`: the local target database to rebuild
+- `sync`: batch size and table filtering rules
+
+### Table filtering
+
+- `exclude_tables`: skip matching tables completely
+- `exclude_data`: recreate schema for matching tables, but do not copy rows
+
+### Example
 
 ```yaml
 source:
@@ -87,7 +160,8 @@ target:
 
 sync:
   batch_size: 1000
-  exclude_tables: []
+  exclude_tables:
+    - cache_snapshots
   exclude_data:
     - audits
     - failed_jobs
@@ -97,7 +171,7 @@ sync:
     - "*_temps"
 ```
 
-Use a different config file when needed:
+Use a non-default config path if needed:
 
 ```bash
 dbpull --config path/to/dbpull.yml sync
@@ -107,69 +181,88 @@ dbpull --config path/to/dbpull.yml sync
 
 | Command | Description |
 | --- | --- |
-| `dbpull init` | Create the initial configuration interactively |
+| `dbpull init` | Create an initial configuration interactively |
 | `dbpull config` | View and edit configuration interactively |
 | `dbpull doctor` | Check SSH access, tunnel, and database connectivity |
 | `dbpull plan` | Show what would be synchronized without changing the target |
 | `dbpull sync [tables...]` | Synchronize all planned tables or only selected tables |
 | `dbpull list-tables` | List source base tables |
-| `dbpull version` | Print the current version |
+| `dbpull version` | Print build metadata for the current binary |
 
-## Example
+## Build
 
-Plan a sync:
-
-```text
-$ dbpull plan
-Tables to sync       640
-Schema only          12
-Excluded             19
-Target database      olshoperp_local
-
-No changes were made.
-```
-
-Run the sync:
-
-```text
-$ dbpull sync
-DBPull Sync
-
-SSH ✓  Source ✓  Target ✓  Plan ✓  Schema ✓  Data ◌
-
-████████████████████████░░░░░░░░  95%
-637 / 671 tables
-16,934,393 rows copied · 17,868 rows/s
-Elapsed 15m48s · ETA 51s
-```
-
-Sync only a few tables:
+Build the current platform:
 
 ```bash
-dbpull sync users products orders
+make build
 ```
 
-## Documentation
+Build all supported binaries:
 
-For architecture, design decisions, package responsibilities, lifecycle details, and other implementation notes, see [TDD.md](TDD.md).
+```bash
+make build-all
+```
 
-`TDD.md` is the authoritative technical document for this project.
+Run the local release pipeline:
+
+```bash
+make release
+```
+
+This creates versioned binaries, release archives, and checksums in `dist/`.
+
+## Versioning
+
+Check the current binary metadata:
+
+```bash
+dbpull version
+```
+
+Release builds are designed to inject version, commit, and build date through linker flags. Published releases should follow Semantic Versioning tags such as `v0.1.0`.
+
+## Safety
+
+DBPull rebuilds the configured target database.
+
+- Never point the target configuration at production.
+- The source database is treated as read-only.
+- The target database is dropped and recreated table by table.
+- Credentials are stored in `dbpull.yml`.
+- Protect that file appropriately and avoid sharing it carelessly.
+
+If you want to inspect the plan before changing anything, run:
+
+```bash
+dbpull plan
+```
+
+## Platform Support
+
+| Component | Status |
+| --- | --- |
+| Linux amd64 | Supported by current build pipeline |
+| Linux arm64 | Supported by current build pipeline |
+| macOS amd64 | Supported by current build pipeline |
+| macOS arm64 | Supported by current build pipeline |
+| Windows amd64 | Supported by current build pipeline |
+| MariaDB source | Implemented |
+| MariaDB target | Implemented |
+| MySQL | Not documented as supported |
 
 ## Roadmap
 
-- Better release packaging
-- End-to-end integration coverage
-- More polish around config and sync UX
+- Publish GitHub Releases
+- Improve end-to-end release documentation
+- Broaden compatibility guidance after more verification
 
 ## Contributing
 
 Issues and pull requests are welcome.
 
-Before opening a change, please:
+Please keep changes small, testable, and consistent with the current scope of the project.
 
-1. Read [TDD.md](TDD.md) for the current technical design.
-2. Keep changes simple and aligned with the current scope.
-3. Run tests and basic Go checks before submitting.
+For implementation details, see [TDD.md](TDD.md).
 
 ## License
 
