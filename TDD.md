@@ -2,13 +2,13 @@
 
 ## 1. Overview
 
-DBPull is a Go CLI for refreshing a local MariaDB database from a remote source database over SSH.
+DBPull is a Go CLI for refreshing a local database from a remote source database over SSH.
 
 Version `0.1.x` is intentionally narrow:
 
-- Source database: MariaDB
+- Source database: remote database reachable over SSH
 - Source access: SSH tunnel only
-- Target database: local MariaDB
+- Target database: local database
 - Sync scope: base tables only
 - Sync strategy: `DROP + CREATE + INSERT`
 - Execution model: sequential and fail-fast
@@ -22,6 +22,8 @@ Out of scope for this version:
 - parallel table sync
 
 The core design goal is simple: keep the code easy to reason about, keep the UX clear, and avoid abstractions that do not solve a real problem today.
+
+The current implementation is tested with MariaDB and MySQL.
 
 ---
 
@@ -46,7 +48,7 @@ DBPull uses a small package layout:
 - `main.go` only bootstraps the CLI and signal-aware context.
 - `cmd/` owns Cobra commands and dependency wiring.
 - `internal/config` owns config parsing, validation, editing, and persistence.
-- `internal/db` owns MariaDB-specific behavior.
+- `internal/db` owns database-specific behavior.
 - `internal/ssh` owns tunnel lifecycle.
 - `internal/sync` owns planning plus schema/data orchestration.
 - `internal/terminal` owns sync progress rendering.
@@ -118,7 +120,7 @@ Responsibility:
 
 - open the SSH client connection
 - allocate a random local TCP port
-- forward local connections to the remote MariaDB address
+- forward local connections to the remote database address
 - keep the tunnel alive
 - close gracefully on command completion or context cancellation
 
@@ -130,8 +132,8 @@ Why:
 
 Responsibility:
 
-- connect to source MariaDB through an existing tunnel
-- connect to target MariaDB directly
+- connect to source database through an existing tunnel
+- connect to target database directly
 - hold one dedicated target SQL session for synchronization
 - list base tables
 - fetch `SHOW CREATE TABLE`
@@ -142,7 +144,7 @@ Responsibility:
 
 Why:
 
-- MariaDB behavior should stay isolated from sync orchestration
+- database-specific behavior should stay isolated from sync orchestration
 
 ### `internal/sync`
 
@@ -557,7 +559,7 @@ sequenceDiagram
 2. open SSH client
 3. listen on `127.0.0.1:0`
 4. expose the chosen local address
-5. proxy local TCP connections to the remote MariaDB address
+5. proxy local TCP connections to the remote database address
 6. send keepalive requests on an interval
 7. close automatically on:
    - normal command completion
@@ -577,7 +579,7 @@ sequenceDiagram
 
 ---
 
-## 11. MariaDB Lifecycle
+## 11. Database Lifecycle
 
 ### Source connection
 
@@ -659,7 +661,7 @@ For each planned table that is not `exclude_data`:
 
 ### Batch sizing
 
-Configured batch size is adjusted per table to avoid MariaDB placeholder limits.
+Configured batch size is adjusted per table to avoid prepared-statement placeholder limits.
 
 Formula:
 
@@ -685,7 +687,7 @@ During row scan and insert:
 - non-empty binary values stay `[]byte`
 - zero numeric values stay zero
 - `false` / tinyint zero stays zero
-- date and time values rely on the MySQL driver with `ParseTime=true`
+- date and time values rely on the MySQL-compatible driver with `ParseTime=true`
 - Unicode text is passed through without normalization
 
 ### SQL mode handling
@@ -704,7 +706,7 @@ After synchronization ends, whether it succeeds, fails, or is cancelled:
 
 ### Why `NO_AUTO_VALUE_ON_ZERO` is required
 
-MariaDB normally treats explicit `0` inserted into an `AUTO_INCREMENT` column as a request for the next generated value.
+MariaDB and MySQL normally treat explicit `0` inserted into an `AUTO_INCREMENT` column as a request for the next generated value.
 
 That behavior breaks synchronization fidelity because:
 
@@ -916,7 +918,7 @@ The test suite emphasizes behavior over abstraction coverage.
 
 ### Gaps
 
-- no live end-to-end SSH + MariaDB integration test yet
+- no live end-to-end SSH + database integration test yet
 - no packaged release smoke test yet
 
 Those are release-process concerns, not architecture blockers.
