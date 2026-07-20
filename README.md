@@ -33,7 +33,7 @@ dbpull plan
 dbpull sync
 ```
 
-## Configuration
+## Basic Configuration
 
 Configuration is stored in `dbpull.yml`.
 
@@ -48,7 +48,7 @@ target:
   ...
 
 sync:
-  batch_size: 1000
+  batch_size: 10000
   exclude_tables:
     - cache
 
@@ -58,6 +58,36 @@ sync:
 
 - `exclude_tables` skips the table completely.
 - `exclude_data` keeps the schema but skips copying rows.
+
+## Advanced Performance Configuration
+
+Most users do not need to change these values. If needed, add them manually under `sync`:
+
+```yaml
+sync:
+  # Optional advanced settings
+  workers: 2
+  transaction_batches: 20
+  max_batch_bytes: 16777216
+```
+
+- `workers`: number of tables copied in parallel. Default: `2`. Use `1` for sequential data sync.
+- `transaction_batches`: commit after this many insert batches. Default: `20`.
+- `max_batch_bytes`: estimated max data size per batch before flushing. Default: `16777216` (16 MiB).
+- Peak batch memory is roughly `workers x max_batch_bytes`, plus row and query overhead.
+- More workers can improve full sync speed, but also uses more source/target connections and memory.
+
+Recommended starting point:
+
+```yaml
+sync:
+  batch_size: 10000
+  workers: 2
+  max_batch_bytes: 16777216
+  transaction_batches: 20
+```
+
+Schema sync remains sequential to avoid unnecessary foreign key, metadata lock, and DDL recovery risk. Data sync uses the worker setting.
 
 ## Commands
 

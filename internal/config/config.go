@@ -11,10 +11,17 @@ import (
 )
 
 const (
-	defaultSSHPort    = 22
-	defaultTargetPort = 3306
-	defaultBatchSize  = 1000
+	defaultSSHPort            = 22
+	defaultTargetPort         = 3306
+	defaultBatchSize          = 10000
+	defaultWorkers            = 2
+	defaultTransactionBatches = 20
+	defaultMaxBatchBytes      = 16 * 1024 * 1024
 )
+
+func DefaultWorkers() int {
+	return defaultWorkers
+}
 
 type Config struct {
 	Source SourceConfig `yaml:"source"`
@@ -45,9 +52,38 @@ type TargetConfig struct {
 }
 
 type SyncConfig struct {
-	BatchSize     int      `yaml:"batch_size"`
-	ExcludeTables []string `yaml:"exclude_tables"`
-	ExcludeData   []string `yaml:"exclude_data"`
+	BatchSize          int      `yaml:"batch_size"`
+	ExcludeTables      []string `yaml:"exclude_tables"`
+	ExcludeData        []string `yaml:"exclude_data"`
+	Workers            int      `yaml:"workers,omitempty"`
+	TransactionBatches int      `yaml:"transaction_batches,omitempty"`
+	MaxBatchBytes      int      `yaml:"max_batch_bytes,omitempty"`
+
+	workersSet            bool
+	transactionBatchesSet bool
+	maxBatchBytesSet      bool
+}
+
+func (c *SyncConfig) UnmarshalYAML(value *yaml.Node) error {
+	type plain SyncConfig
+	var cfg plain
+	if err := value.Decode(&cfg); err != nil {
+		return err
+	}
+
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		switch value.Content[i].Value {
+		case "workers":
+			cfg.workersSet = true
+		case "transaction_batches":
+			cfg.transactionBatchesSet = true
+		case "max_batch_bytes":
+			cfg.maxBatchBytesSet = true
+		}
+	}
+
+	*c = SyncConfig(cfg)
+	return nil
 }
 
 func Load(path string) (Config, error) {
@@ -108,6 +144,18 @@ func validate(cfg Config) error {
 		return fmt.Errorf("invalid value for %q: must be greater than 0", "sync.batch_size")
 	}
 
+	if cfg.Sync.workersSet && cfg.Sync.Workers <= 0 {
+		return fmt.Errorf("invalid value for %q: must be greater than 0", "sync.workers")
+	}
+
+	if cfg.Sync.transactionBatchesSet && cfg.Sync.TransactionBatches <= 0 {
+		return fmt.Errorf("invalid value for %q: must be greater than 0", "sync.transaction_batches")
+	}
+
+	if cfg.Sync.maxBatchBytesSet && cfg.Sync.MaxBatchBytes <= 0 {
+		return fmt.Errorf("invalid value for %q: must be greater than 0", "sync.max_batch_bytes")
+	}
+
 	return nil
 }
 
@@ -122,6 +170,18 @@ func applyDefaults(cfg *Config) {
 
 	if cfg.Sync.BatchSize == 0 {
 		cfg.Sync.BatchSize = defaultBatchSize
+	}
+
+	if cfg.Sync.Workers == 0 && !cfg.Sync.workersSet {
+		cfg.Sync.Workers = defaultWorkers
+	}
+
+	if cfg.Sync.TransactionBatches == 0 && !cfg.Sync.transactionBatchesSet {
+		cfg.Sync.TransactionBatches = defaultTransactionBatches
+	}
+
+	if cfg.Sync.MaxBatchBytes == 0 && !cfg.Sync.maxBatchBytesSet {
+		cfg.Sync.MaxBatchBytes = defaultMaxBatchBytes
 	}
 }
 

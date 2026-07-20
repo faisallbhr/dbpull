@@ -76,6 +76,7 @@ func runSync(cmd *cobra.Command, args []string, verbose bool) (err error) {
 	if err != nil {
 		return fmt.Errorf("connect source database: %w", err)
 	}
+	sourceClient.SetPoolSize(cfg.Sync.Workers)
 	defer func() {
 		err = joinSyncError(err, sourceClient.Close())
 	}()
@@ -93,6 +94,7 @@ func runSync(cmd *cobra.Command, args []string, verbose bool) (err error) {
 	if err != nil {
 		return fmt.Errorf("connect target database: %w", err)
 	}
+	targetClient.SetPoolSize(cfg.Sync.Workers)
 	defer func() {
 		err = joinSyncError(err, targetClient.Close())
 	}()
@@ -142,7 +144,7 @@ func runSync(cmd *cobra.Command, args []string, verbose bool) (err error) {
 		}
 		renderErr = renderer.Handle(update)
 	}
-	if err := newDataSyncer(sourceClient, targetClient, progress).Sync(ctx, plan, cfg.Sync.BatchSize); err != nil {
+	if err := newDataSyncer(sourceClient, targetClient, progress).Sync(ctx, plan, cfg.Sync.BatchSize, cfg.Sync.MaxBatchBytes, cfg.Sync.TransactionBatches, cfg.Sync.Workers); err != nil {
 		if renderErr != nil {
 			err = errors.Join(err, fmt.Errorf("render sync progress: %w", renderErr))
 		}

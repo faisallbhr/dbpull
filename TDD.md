@@ -11,7 +11,7 @@ Version `0.1.x` is intentionally narrow:
 - Target database: local database
 - Sync scope: base tables only
 - Sync strategy: `DROP + CREATE + INSERT`
-- Execution model: sequential and fail-fast
+- Execution model: schema sync sequential, data sync bounded-parallel and fail-fast
 
 Out of scope for this version:
 
@@ -19,7 +19,7 @@ Out of scope for this version:
 - replication or CDC
 - bidirectional sync
 - conflict resolution
-- parallel table sync
+- incremental or compare sync
 
 The core design goal is simple: keep the code easy to reason about, keep the UX clear, and avoid abstractions that do not solve a real problem today.
 
@@ -134,7 +134,7 @@ Responsibility:
 
 - connect to source database through an existing tunnel
 - connect to target database directly
-- hold one dedicated target SQL session for synchronization
+- hold dedicated target SQL sessions for schema sync and data workers
 - list base tables
 - fetch `SHOW CREATE TABLE`
 - stream source rows in batches
@@ -251,7 +251,7 @@ target:
   password: local_password
 
 sync:
-  batch_size: 1000
+  batch_size: 10000
   exclude_tables: []
   exclude_data:
     - audits
@@ -267,6 +267,9 @@ sync:
 - `ssh.port` must be greater than `0`
 - `target.port` must be greater than `0`
 - `sync.batch_size` must be greater than `0`
+- `sync.workers`, when present, must be greater than `0`
+- `sync.transaction_batches`, when present, must be greater than `0`
+- `sync.max_batch_bytes`, when present, must be greater than `0`
 
 ### Defaults
 
@@ -274,7 +277,10 @@ sync:
 - `target.host = 127.0.0.1`
 - `target.port = 3306`
 - `target.username = root`
-- `sync.batch_size = 1000`
+- `sync.batch_size = 10000`
+- `sync.workers = 2`
+- `sync.transaction_batches = 20`
+- `sync.max_batch_bytes = 16777216`
 - `sync.exclude_data` gets the default starter list in `dbpull init`
 
 ### Normalization
@@ -291,6 +297,7 @@ On load or save:
 - parent directories are only created when explicitly requested
 - final file mode is `0600`
 - config is reloaded after save so the caller receives normalized values
+- advanced sync fields are not written by the interactive editor unless already present or set manually
 
 ---
 
@@ -324,6 +331,8 @@ On load or save:
 - batch size
 - exclude tables list editor
 - exclude data list editor
+
+Advanced performance fields (`workers`, `transaction_batches`, `max_batch_bytes`) are YAML-only. They are validated when present, but are not shown in `dbpull init` or `dbpull config`.
 
 ### Why one editor
 
@@ -379,10 +388,10 @@ On load or save:
 3. connect source DB
 4. connect target DB
 5. build plan
-6. prepare target sync session
+6. prepare a dedicated target session for schema sync
 7. recreate schema for all planned tables
-8. copy data for non-`exclude_data` tables
-9. restore target session settings
+8. copy data for non-`exclude_data` tables with a bounded worker pool
+9. restore target session settings for each schema/data session
 10. close progress renderer
 
 ### `dbpull list-tables`
@@ -481,18 +490,16 @@ sequenceDiagram
     CLI->>TargetDB: connect + ping
     CLI->>Planner: build plan
     Planner-->>CLI: SyncPlan
-    CLI->>TargetDB: read @@SESSION.sql_mode
-    CLI->>TargetDB: enable NO_AUTO_VALUE_ON_ZERO
-    CLI->>TargetDB: SET FOREIGN_KEY_CHECKS = 0
+    CLI->>TargetDB: prepare schema session
     CLI->>Schema: sync schema
     Schema->>SourceDB: SHOW CREATE TABLE
     Schema->>TargetDB: DROP TABLE / CREATE TABLE
     CLI->>Data: sync data
-    Data->>SourceDB: stream rows
-    Data->>TargetDB: insert batch
+    Data->>TargetDB: open one session per worker
+    Data->>SourceDB: stream table rows
+    Data->>TargetDB: insert batches in transactions
     Data->>Terminal: emit progress
-    CLI->>TargetDB: SET FOREIGN_KEY_CHECKS = 1
-    CLI->>TargetDB: restore original sql_mode
+    Data->>TargetDB: restore each worker session
     CLI->>Terminal: close renderer
     CLI->>TargetDB: close
     CLI->>SourceDB: close
@@ -590,11 +597,15 @@ sequenceDiagram
   - `SHOW CREATE TABLE`
   - row streaming
 
+Source rows are selected with an explicit insertable column list from `information_schema.columns`. Generated columns are skipped so target inserts do not try to write values MySQL/MariaDB computes.
+
 ### Target connection
 
 - built directly from local target config
 - destructive write path
-- one dedicated SQL connection is opened and reused for sync
+- `TargetClient` owns a `*sql.DB` pool
+- schema sync uses one dedicated SQL session
+- each data worker uses one dedicated SQL session for its lifetime
 - used for:
   - `DROP TABLE`
   - `CREATE TABLE`
@@ -605,6 +616,8 @@ sequenceDiagram
 ### Connection policy
 
 - connections are per command
+- source and target pools are capped to `sync.workers`
+- connection lifetime is 30 minutes and idle time is 5 minutes, which avoids unbounded growth and stale long-idle sessions without churn during normal syncs
 - no shared long-lived process state
 - cleanup uses local `defer` near resource creation
 
@@ -622,21 +635,20 @@ For each planned table:
 
 ### Foreign key handling
 
-- `FOREIGN_KEY_CHECKS` is disabled before schema sync starts
-- it remains disabled through the data phase
-- it is re-enabled after data sync finishes
-- a deferred safeguard attempts restoration even on failure
+- `FOREIGN_KEY_CHECKS` is disabled on each target sync session
+- it is restored when that schema or data worker session closes
+- a deferred safeguard attempts restoration even on failure or cancellation
 
 ### Dedicated target session
 
-Schema sync and data sync share the same dedicated target SQL session.
+Schema sync uses one dedicated target SQL session. Data sync uses one dedicated target SQL session per worker.
 
 This matters because session settings such as:
 
 - `FOREIGN_KEY_CHECKS`
 - `sql_mode`
 
-must stay consistent for every `DROP TABLE`, `CREATE TABLE`, and `INSERT`.
+must stay consistent for every `DROP TABLE`, `CREATE TABLE`, and `INSERT`. Sessions are not shared across workers or transactions.
 
 ### Why this approach
 
@@ -651,17 +663,20 @@ Data sync streams batches from source and inserts them into target.
 
 ### Flow
 
-For each planned table that is not `exclude_data`:
+For each planned table that is not `exclude_data`, assigned wholly to one worker:
 
 1. start table progress
 2. stream rows from source
-3. insert batch into target
-4. update cumulative progress
-5. stop on first error
+3. begin a target transaction when the first batch is ready
+4. insert batches into target
+5. commit after `sync.transaction_batches` batches
+6. commit remaining batches when the table finishes
+7. update cumulative progress
+8. stop all workers on first error
 
 ### Batch sizing
 
-Configured batch size is adjusted per table to avoid prepared-statement placeholder limits.
+Configured batch size is adjusted per table to avoid prepared-statement placeholder limits. Batches also flush when estimated row data reaches `sync.max_batch_bytes`.
 
 Formula:
 
@@ -675,6 +690,9 @@ effectiveBatchSize >= 1
 
 - wide tables can exceed prepared statement placeholder limits
 - per-table adjustment is safer than global mutation
+- large JSON, TEXT, and BLOB values should not force unbounded batch memory
+
+If MySQL rejects a multi-row insert because the packet is too large, DBPull splits that batch in half and retries. A single row that still fails returns an actionable `max_allowed_packet` error.
 
 ### Value preservation rules
 
@@ -852,22 +870,22 @@ Even on failure or cancellation:
 
 ### Application-level policy
 
-DBPull does not parallelize tables in `0.1.x`.
+DBPull parallelizes data sync with a bounded worker pool. `sync.workers = 1` keeps sequential behavior.
 
 ### Why
 
-- simpler destructive semantics
-- easier progress reporting
-- easier failure handling
-- no dependency ordering logic needed
+- one table is handled entirely by one worker
+- one worker owns one target session
+- no transaction is shared across workers
+- context cancellation stops sibling workers on first error
+- schema sync remains sequential to avoid foreign key, metadata lock, and DDL recovery risk
 
 ### Internal concurrency that still exists
 
 - SSH forwarding goroutines
 - network I/O managed by the standard library
 - renderer goroutine used by the progress dashboard
-
-This is implementation detail, not parallel table execution.
+- bounded data worker goroutines controlled by `sync.workers`
 
 ---
 

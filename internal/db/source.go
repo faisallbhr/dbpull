@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
+	"time"
 
 	"dbpull/internal/config"
 
@@ -71,6 +73,7 @@ func ConnectSource(cfg config.SourceConfig, tunnelAddr string) (*SourceClient, e
 	if err != nil {
 		return nil, fmt.Errorf("open source database: %w", err)
 	}
+	configurePool(db, config.DefaultWorkers())
 
 	return &SourceClient{
 		db:       sqlDB{DB: db},
@@ -91,6 +94,12 @@ func (c *SourceClient) Ping(ctx context.Context) error {
 		return fmt.Errorf("ping source database: %w", err)
 	}
 	return nil
+}
+
+func (c *SourceClient) SetPoolSize(workers int) {
+	if db, ok := c.db.(sqlDB); ok {
+		configurePool(db.DB, workers)
+	}
 }
 
 func (c *SourceClient) ListTables(ctx context.Context) ([]Table, error) {
@@ -140,24 +149,31 @@ func (c *SourceClient) StreamRows(
 	ctx context.Context,
 	table string,
 	batchSize int,
+	maxBatchBytes int,
 	notice BatchSizeNotice,
 	handle RowBatchHandler,
 ) error {
 	if batchSize <= 0 {
 		return fmt.Errorf("stream rows for %q: batch size must be greater than 0", table)
 	}
+	if maxBatchBytes <= 0 {
+		return fmt.Errorf("stream rows for %q: max batch bytes must be greater than 0", table)
+	}
 
-	query := fmt.Sprintf("SELECT * FROM %s", quoteIdentifier(table))
+	columns, err := c.InsertableColumns(ctx, table)
+	if err != nil {
+		return err
+	}
+	if len(columns) == 0 {
+		return fmt.Errorf("stream rows for %q: no insertable columns found", table)
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s", quoteIdentifiers(columns), quoteIdentifier(table))
 	rows, err := c.db.QueryContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("query rows for %q: %w", table, err)
 	}
 	defer rows.Close()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		return fmt.Errorf("read columns for %q: %w", table, err)
-	}
 
 	effectiveBatchSize := calculateEffectiveBatchSize(batchSize, len(columns))
 	if notice != nil && effectiveBatchSize < batchSize {
@@ -173,19 +189,30 @@ func (c *SourceClient) StreamRows(
 		Columns: append([]string(nil), columns...),
 		Rows:    make([][]any, 0, effectiveBatchSize),
 	}
+	batchBytes := 0
 
 	for rows.Next() {
 		row, err := scanRow(rows, len(columns))
 		if err != nil {
 			return fmt.Errorf("scan row for %q: %w", table, err)
 		}
+		rowBytes := estimateRowBytes(row)
 
-		batch.Rows = append(batch.Rows, row)
-		if len(batch.Rows) == effectiveBatchSize {
+		if len(batch.Rows) > 0 && batchBytes+rowBytes > maxBatchBytes {
 			if err := handle(batch); err != nil {
 				return fmt.Errorf("handle row batch for %q: %w", table, err)
 			}
 			batch.Rows = make([][]any, 0, effectiveBatchSize)
+			batchBytes = 0
+		}
+		batch.Rows = append(batch.Rows, row)
+		batchBytes += rowBytes
+		if len(batch.Rows) == effectiveBatchSize || batchBytes >= maxBatchBytes {
+			if err := handle(batch); err != nil {
+				return fmt.Errorf("handle row batch for %q: %w", table, err)
+			}
+			batch.Rows = make([][]any, 0, effectiveBatchSize)
+			batchBytes = 0
 		}
 	}
 
@@ -223,6 +250,41 @@ func calculateEffectiveBatchSize(configuredBatchSize, columnCount int) int {
 	return maxRowsByColumns
 }
 
+func (c *SourceClient) InsertableColumns(ctx context.Context, table string) ([]string, error) {
+	const query = `
+SELECT column_name, extra
+FROM information_schema.columns
+WHERE table_schema = ?
+  AND table_name = ?
+ORDER BY ordinal_position
+`
+
+	rows, err := c.db.QueryContext(ctx, query, c.database, table)
+	if err != nil {
+		return nil, fmt.Errorf("read columns for %q: %w", table, err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var name string
+		var extra string
+		if err := rows.Scan(&name, &extra); err != nil {
+			return nil, fmt.Errorf("scan column for %q: %w", table, err)
+		}
+		if strings.Contains(strings.ToUpper(extra), "GENERATED") {
+			continue
+		}
+		columns = append(columns, name)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate columns for %q: %w", table, err)
+	}
+
+	return columns, nil
+}
+
 func buildSourceDSN(cfg config.SourceConfig, tunnelAddr string) (string, error) {
 	if strings.TrimSpace(tunnelAddr) == "" {
 		return "", fmt.Errorf("source tunnel address is required")
@@ -257,24 +319,43 @@ func scanRow(rows rowSet, columnCount int) ([]any, error) {
 		return nil, err
 	}
 
-	for i, value := range values {
-		values[i] = cloneValue(value)
-	}
-
 	return values, nil
 }
 
-func cloneValue(value any) any {
-	if bytes, ok := value.([]byte); ok {
-		if bytes == nil {
-			return nil
-		}
-
-		cloned := make([]byte, len(bytes))
-		copy(cloned, bytes)
-		return cloned
+func estimateRowBytes(row []any) int {
+	total := 0
+	for _, value := range row {
+		total += estimateValueBytes(value)
 	}
-	return value
+	if total == 0 {
+		return 1
+	}
+	return total
+}
+
+func estimateValueBytes(value any) int {
+	switch v := value.(type) {
+	case nil:
+		return 1
+	case []byte:
+		return len(v)
+	case string:
+		return len(v)
+	case int:
+		return strconv.IntSize / 8
+	case int8, uint8, bool:
+		return 1
+	case int16, uint16:
+		return 2
+	case int32, uint32, float32:
+		return 4
+	case int64, uint64, float64:
+		return 8
+	case time.Time:
+		return len(time.RFC3339Nano)
+	default:
+		return len(fmt.Sprint(v))
+	}
 }
 
 func quoteIdentifier(name string) string {

@@ -31,6 +31,7 @@ func TestRendererTableBasedPercentage(t *testing.T) {
 
 	*clock = clock.Add(10 * time.Second)
 	advanceTick(ticker, *clock)
+	mustNoError(t, renderer.Close())
 
 	text := out.String()
 	if !strings.Contains(text, "50%") || !strings.Contains(text, "1 / 2 tables") || strings.Contains(text, "Current") {
@@ -51,6 +52,7 @@ func TestRendererSixThirtySevenOfSixSeventyOne(t *testing.T) {
 
 	*clock = clock.Add(10 * time.Second)
 	advanceTick(ticker, *clock)
+	mustNoError(t, renderer.Close())
 
 	text := out.String()
 	if !strings.Contains(text, "95%") || !strings.Contains(text, "637 / 671 tables") {
@@ -78,8 +80,9 @@ func TestRendererThrottle500ms(t *testing.T) {
 	initial := out.String()
 	*clock = clock.Add(400 * time.Millisecond)
 	advanceTick(ticker, *clock)
+	mustNoError(t, renderer.Close())
 
-	if out.String() != initial {
+	if strings.TrimSuffix(out.String(), "\n") != initial {
 		t.Fatalf("output changed before 500ms: %q", out.String())
 	}
 }
@@ -102,6 +105,7 @@ func TestRendererNoRenderBurstFromRapidBatchEvents(t *testing.T) {
 	beforeTick := out.String()
 	*clock = clock.Add(500 * time.Millisecond)
 	advanceTick(ticker, *clock)
+	mustNoError(t, renderer.Close())
 
 	if out.String() == beforeTick {
 		t.Fatal("expected one throttled render after tick")
@@ -119,6 +123,7 @@ func TestRendererSmoothedSpeed(t *testing.T) {
 	*clock = clock.Add(1 * time.Second)
 	mustNoError(t, renderer.Handle(syncpkg.DataProgress{Kind: syncpkg.DataProgressTableProgress, TableIndex: 1, TotalRows: 300, BatchNumber: 2}))
 	advanceTick(ticker, *clock)
+	mustNoError(t, renderer.Close())
 
 	text := out.String()
 	if !strings.Contains(text, "120 rows/s") {
@@ -135,6 +140,7 @@ func TestRendererSmoothedETA(t *testing.T) {
 	*clock = clock.Add(10 * time.Second)
 	mustNoError(t, renderer.Handle(syncpkg.DataProgress{Kind: syncpkg.DataProgressTableComplete, TableIndex: 5}))
 	advanceTick(ticker, *clock)
+	mustNoError(t, renderer.Close())
 
 	text := out.String()
 	if !strings.Contains(text, "ETA 10s") {
@@ -151,6 +157,7 @@ func TestRendererETACalculatingState(t *testing.T) {
 	*clock = clock.Add(1500 * time.Millisecond)
 	mustNoError(t, renderer.Handle(syncpkg.DataProgress{Kind: syncpkg.DataProgressTableComplete, TableIndex: 4}))
 	advanceTick(ticker, *clock)
+	mustNoError(t, renderer.Close())
 
 	if !strings.Contains(out.String(), "ETA calculating...") {
 		t.Fatalf("output = %q", out.String())
@@ -178,6 +185,7 @@ func TestRendererNonTTYIntervalOutput(t *testing.T) {
 	first := out.String()
 	*clock = clock.Add(5 * time.Second)
 	advanceTick(ticker, *clock)
+	mustNoError(t, renderer.Close())
 	if out.String() != first {
 		t.Fatalf("non-tty output changed before 10s: %q", out.String())
 	}
@@ -221,6 +229,7 @@ func TestRendererNoCurrentTableOutput(t *testing.T) {
 
 	*clock = clock.Add(10 * time.Second)
 	advanceTick(ticker, *clock)
+	mustNoError(t, renderer.Close())
 
 	if strings.Contains(out.String(), "secret_table_name") || strings.Contains(out.String(), "Current") {
 		t.Fatalf("output = %q", out.String())

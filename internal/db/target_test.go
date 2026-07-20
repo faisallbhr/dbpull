@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"dbpull/internal/config"
+
+	mysql "github.com/go-sql-driver/mysql"
 )
 
 func TestBuildTargetDSN(t *testing.T) {
@@ -83,6 +85,23 @@ func TestTargetSchemaMethods(t *testing.T) {
 		if queries[i] != query {
 			t.Fatalf("queries[%d] = %q, want %q", i, queries[i], query)
 		}
+	}
+}
+
+func TestTargetSchemaMethodsOpenSessionLazily(t *testing.T) {
+	opened := false
+	client := &TargetClient{
+		newSes: func(ctx context.Context) (targetSession, func() error, error) {
+			opened = true
+			return fakeTargetSession{}, func() error { return nil }, nil
+		},
+	}
+
+	if err := client.DropTable(context.Background(), "users"); err != nil {
+		t.Fatalf("DropTable() error = %v", err)
+	}
+	if !opened {
+		t.Fatal("target session was not opened")
 	}
 }
 
@@ -350,10 +369,150 @@ func TestCloseRestoresForeignKeysAndSQLMode(t *testing.T) {
 	}
 }
 
+func TestInsertBatchSplitsPacketTooLargeError(t *testing.T) {
+	calls := 0
+	var rowCounts []int
+	client := &TargetClient{
+		session: fakeTargetSession{
+			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
+				calls++
+				rowCounts = append(rowCounts, len(args))
+				if calls == 1 {
+					return nil, &mysql.MySQLError{Number: 1153, Message: "packet bigger than max_allowed_packet"}
+				}
+				return fakeResult{}, nil
+			},
+		},
+	}
+
+	err := client.InsertBatch(context.Background(), "documents", RowBatch{
+		Columns: []string{"id"},
+		Rows:    [][]any{{int64(1)}, {int64(2)}, {int64(3)}, {int64(4)}},
+	})
+	if err != nil {
+		t.Fatalf("InsertBatch() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(rowCounts, []int{4, 2, 2}) {
+		t.Fatalf("rowCounts = %#v", rowCounts)
+	}
+}
+
+func TestInsertBatchDoesNotSplitNonPacketError(t *testing.T) {
+	wantErr := errors.New("duplicate key")
+	calls := 0
+	client := &TargetClient{
+		session: fakeTargetSession{
+			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
+				calls++
+				return nil, wantErr
+			},
+		},
+	}
+
+	err := client.InsertBatch(context.Background(), "users", RowBatch{
+		Columns: []string{"id"},
+		Rows:    [][]any{{int64(1)}, {int64(2)}},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("InsertBatch() error = %v, want %v", err, wantErr)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+func TestInsertBatchSinglePacketTooLargeReturnsClearError(t *testing.T) {
+	client := &TargetClient{
+		session: fakeTargetSession{
+			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
+				return nil, &mysql.MySQLError{Number: 1153, Message: "packet bigger than max_allowed_packet"}
+			},
+		},
+	}
+
+	err := client.InsertBatch(context.Background(), "documents", RowBatch{
+		Columns: []string{"payload"},
+		Rows:    [][]any{{strings.Repeat("x", 1024)}},
+	})
+	if err == nil {
+		t.Fatal("InsertBatch() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "max_allowed_packet") || !strings.Contains(err.Error(), "documents") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestNewSessionSetsUpAndRestoresEachWorkerSession(t *testing.T) {
+	var queries []string
+	var argsList [][]any
+	closed := false
+	client := &TargetClient{
+		newSes: func(ctx context.Context) (targetSession, func() error, error) {
+			return fakeTargetSession{
+					queryRow: func(ctx context.Context, query string, args ...any) targetScanner {
+						return fakeTargetScanner{
+							scan: func(dest ...any) error {
+								*dest[0].(*string) = "STRICT_TRANS_TABLES"
+								return nil
+							},
+						}
+					},
+					exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
+						queries = append(queries, query)
+						argsList = append(argsList, append([]any(nil), args...))
+						return fakeResult{}, nil
+					},
+				}, func() error {
+					closed = true
+					return nil
+				}, nil
+		},
+	}
+
+	session, err := client.NewSession(context.Background())
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	wantQueries := []string{
+		"SET SESSION sql_mode = ?",
+		"SET FOREIGN_KEY_CHECKS = 0",
+		"SET FOREIGN_KEY_CHECKS = 1",
+		"SET SESSION sql_mode = ?",
+	}
+	if !reflect.DeepEqual(queries, wantQueries) {
+		t.Fatalf("queries = %#v, want %#v", queries, wantQueries)
+	}
+	if argsList[0][0] != "STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO" || argsList[3][0] != "STRICT_TRANS_TABLES" {
+		t.Fatalf("argsList = %#v", argsList)
+	}
+	if !closed {
+		t.Fatal("session was not closed")
+	}
+}
+
+func TestConfigurePoolUsesWorkerLimit(t *testing.T) {
+	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:3306)/app")
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	configurePool(db, 3)
+	if db.Stats().MaxOpenConnections != 3 {
+		t.Fatalf("MaxOpenConnections = %d, want 3", db.Stats().MaxOpenConnections)
+	}
+}
+
 type fakeTargetSession struct {
 	ping     func(context.Context) error
 	exec     func(context.Context, string, ...any) (sql.Result, error)
 	queryRow func(context.Context, string, ...any) targetScanner
+	beginTx  func(context.Context, *sql.TxOptions) (targetTransaction, error)
 }
 
 func (p fakeTargetSession) PingContext(ctx context.Context) error {
@@ -375,6 +534,40 @@ func (p fakeTargetSession) QueryRowContext(ctx context.Context, query string, ar
 		return p.queryRow(ctx, query, args...)
 	}
 	return fakeTargetScanner{}
+}
+
+func (p fakeTargetSession) BeginTx(ctx context.Context, opts *sql.TxOptions) (targetTransaction, error) {
+	if p.beginTx != nil {
+		return p.beginTx(ctx, opts)
+	}
+	return &fakeTargetTx{}, nil
+}
+
+type fakeTargetTx struct {
+	exec     func(context.Context, string, ...any) (sql.Result, error)
+	commit   func() error
+	rollback func() error
+}
+
+func (tx *fakeTargetTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if tx.exec != nil {
+		return tx.exec(ctx, query, args...)
+	}
+	return fakeResult{}, nil
+}
+
+func (tx *fakeTargetTx) Commit() error {
+	if tx.commit != nil {
+		return tx.commit()
+	}
+	return nil
+}
+
+func (tx *fakeTargetTx) Rollback() error {
+	if tx.rollback != nil {
+		return tx.rollback()
+	}
+	return nil
 }
 
 type fakeTargetScanner struct {

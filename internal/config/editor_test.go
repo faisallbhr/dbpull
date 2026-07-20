@@ -173,6 +173,90 @@ func TestRunEditorExcludeDataAddRemove(t *testing.T) {
 	}
 }
 
+func TestRunEditorDoesNotShowAdvancedSyncFields(t *testing.T) {
+	ui := newFakeUI(
+		[]string{menuSync, menuBack, menuExit},
+		nil,
+	)
+
+	_, err := runEditor(ui, EditorOptions{Path: filepath.Join(t.TempDir(), "dbpull.yml")})
+	if err != nil {
+		t.Fatalf("runEditor() error = %v", err)
+	}
+
+	got := strings.Join(ui.optionLabels, "\n")
+	for _, advanced := range []string{"workers", "transaction", "bytes", "packet"} {
+		if strings.Contains(strings.ToLower(got), advanced) {
+			t.Fatalf("advanced field %q shown in options:\n%s", advanced, got)
+		}
+	}
+}
+
+func TestSaveDoesNotWriteDefaultAdvancedFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dbpull.yml")
+
+	_, _, err := save(path, validConfig(), true)
+	if err != nil {
+		t.Fatalf("save() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+	text := string(data)
+	for _, field := range []string{"workers:", "transaction_batches:", "max_batch_bytes:"} {
+		if strings.Contains(text, field) {
+			t.Fatalf("config contains advanced field %q:\n%s", field, text)
+		}
+	}
+}
+
+func TestSavePreservesManualAdvancedFields(t *testing.T) {
+	path := writeConfigFile(t, `
+source:
+  database: app
+  username: user
+  password: pass
+ssh:
+  host: ssh.example.com
+  port: 22
+  user: remote
+  private_key: ~/.ssh/id_rsa
+target:
+  host: 127.0.0.1
+  port: 3306
+  database: app_local
+  username: root
+  password: root
+sync:
+  batch_size: 1000
+  workers: 4
+  transaction_batches: 10
+  max_batch_bytes: 1048576
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	cfg.Source.Database = "renamed"
+	if _, _, err := save(path, cfg, false); err != nil {
+		t.Fatalf("save() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+	text := string(data)
+	for _, field := range []string{"workers: 4", "transaction_batches: 10", "max_batch_bytes: 1048576"} {
+		if !strings.Contains(text, field) {
+			t.Fatalf("config missing %q:\n%s", field, text)
+		}
+	}
+}
+
 func TestRunEditorValidation(t *testing.T) {
 	_, err := runEditor(newFakeUI(
 		[]string{menuSource, menuSave},
@@ -225,8 +309,10 @@ func TestSaveFilePreservesPermission0600(t *testing.T) {
 }
 
 type fakeUI struct {
-	selects []string
-	inputs  []string
+	selects      []string
+	inputs       []string
+	optionLabels []string
+	inputTitles  []string
 }
 
 func newFakeUI(selects, inputs []string) *fakeUI {
@@ -237,6 +323,9 @@ func newFakeUI(selects, inputs []string) *fakeUI {
 }
 
 func (f *fakeUI) Select(title string, options []MenuOption) (string, error) {
+	for _, option := range options {
+		f.optionLabels = append(f.optionLabels, option.Label)
+	}
 	if len(f.selects) == 0 {
 		return "", nil
 	}
@@ -246,6 +335,7 @@ func (f *fakeUI) Select(title string, options []MenuOption) (string, error) {
 }
 
 func (f *fakeUI) Input(title string, value string, password bool) (string, error) {
+	f.inputTitles = append(f.inputTitles, title)
 	if len(f.inputs) == 0 {
 		return value, nil
 	}

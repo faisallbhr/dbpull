@@ -134,11 +134,14 @@ func (doctorSourceStub) StreamRows(
 	ctx context.Context,
 	table string,
 	batchSize int,
+	maxBatchBytes int,
 	notice db.BatchSizeNotice,
 	handle db.RowBatchHandler,
 ) error {
 	return nil
 }
+
+func (doctorSourceStub) SetPoolSize(workers int) {}
 
 type doctorTargetStub struct{}
 
@@ -165,6 +168,12 @@ func (doctorTargetStub) CreateTable(ctx context.Context, createSQL string) error
 func (doctorTargetStub) InsertBatch(ctx context.Context, table string, batch db.RowBatch) error {
 	return nil
 }
+
+func (doctorTargetStub) NewSession(ctx context.Context) (db.DataSession, error) {
+	return nil, nil
+}
+
+func (doctorTargetStub) SetPoolSize(workers int) {}
 
 func writeTempFile(t *testing.T, name, contents string) string {
 	t.Helper()

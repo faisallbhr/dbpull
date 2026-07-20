@@ -24,9 +24,11 @@ type sourceClient interface {
 		ctx context.Context,
 		table string,
 		batchSize int,
+		maxBatchBytes int,
 		notice db.BatchSizeNotice,
 		handle db.RowBatchHandler,
 	) error
+	SetPoolSize(workers int)
 }
 
 type targetClient interface {
@@ -36,6 +38,8 @@ type targetClient interface {
 	DropTable(ctx context.Context, table string) error
 	CreateTable(ctx context.Context, createSQL string) error
 	InsertBatch(ctx context.Context, table string, batch db.RowBatch) error
+	NewSession(ctx context.Context) (db.DataSession, error)
+	SetPoolSize(workers int)
 }
 
 var (

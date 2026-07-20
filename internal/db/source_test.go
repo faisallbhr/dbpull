@@ -106,6 +106,15 @@ func TestStreamRowsBatchesRowsAndClonesBytes(t *testing.T) {
 	client := &SourceClient{
 		db: fakeQueryer{
 			query: func(ctx context.Context, query string, args ...any) (rowSet, error) {
+				if strings.Contains(query, "information_schema.columns") {
+					return &fakeRows{
+						columns: []string{"column_name", "extra"},
+						rows: [][]any{
+							{"id", ""},
+							{"name", ""},
+						},
+					}, nil
+				}
 				return &fakeRows{
 					columns: []string{"id", "name"},
 					rows: [][]any{
@@ -119,7 +128,7 @@ func TestStreamRowsBatchesRowsAndClonesBytes(t *testing.T) {
 	}
 
 	var batches []RowBatch
-	err := client.StreamRows(context.Background(), "users", 2, nil, func(batch RowBatch) error {
+	err := client.StreamRows(context.Background(), "users", 2, 1024, nil, func(batch RowBatch) error {
 		copied := RowBatch{
 			Columns: append([]string(nil), batch.Columns...),
 			Rows:    make([][]any, len(batch.Rows)),
@@ -234,6 +243,12 @@ func TestStreamRowsReturnsHandlerError(t *testing.T) {
 	client := &SourceClient{
 		db: fakeQueryer{
 			query: func(ctx context.Context, query string, args ...any) (rowSet, error) {
+				if strings.Contains(query, "information_schema.columns") {
+					return &fakeRows{
+						columns: []string{"column_name", "extra"},
+						rows:    [][]any{{"id", ""}},
+					}, nil
+				}
 				return &fakeRows{
 					columns: []string{"id"},
 					rows:    [][]any{{int64(1)}},
@@ -242,7 +257,7 @@ func TestStreamRowsReturnsHandlerError(t *testing.T) {
 		},
 	}
 
-	err := client.StreamRows(context.Background(), "users", 1, nil, func(batch RowBatch) error {
+	err := client.StreamRows(context.Background(), "users", 1, 1024, nil, func(batch RowBatch) error {
 		return wantErr
 	})
 	if !errors.Is(err, wantErr) {
@@ -286,6 +301,16 @@ func TestStreamRowsReportsBatchSizeReduction(t *testing.T) {
 	client := &SourceClient{
 		db: fakeQueryer{
 			query: func(ctx context.Context, query string, args ...any) (rowSet, error) {
+				if strings.Contains(query, "information_schema.columns") {
+					columnRows := make([][]any, len(columns))
+					for i, column := range columns {
+						columnRows[i] = []any{column, ""}
+					}
+					return &fakeRows{
+						columns: []string{"column_name", "extra"},
+						rows:    columnRows,
+					}, nil
+				}
 				return &fakeRows{
 					columns: columns,
 					rows:    [][]any{row},
@@ -299,6 +324,7 @@ func TestStreamRowsReportsBatchSizeReduction(t *testing.T) {
 		context.Background(),
 		"omni_sales_orders",
 		1000,
+		1024,
 		func(got BatchSizeAdjustment) {
 			adjustment = got
 		},
@@ -319,6 +345,115 @@ func TestStreamRowsReportsBatchSizeReduction(t *testing.T) {
 	}
 }
 
+func TestStreamRowsBatchesByEstimatedBytes(t *testing.T) {
+	client := sourceClientWithRows([]string{"id", "body"}, [][]any{
+		{int64(1), "abcd"},
+		{int64(2), "efgh"},
+		{int64(3), "ij"},
+	})
+
+	var sizes []int
+	err := client.StreamRows(context.Background(), "documents", 100, 13, nil, func(batch RowBatch) error {
+		sizes = append(sizes, len(batch.Rows))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamRows() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(sizes, []int{1, 1, 1}) {
+		t.Fatalf("batch sizes = %#v, want %#v", sizes, []int{1, 1, 1})
+	}
+}
+
+func TestStreamRowsKeepsSingleRowOverMaxBytes(t *testing.T) {
+	client := sourceClientWithRows([]string{"id", "body"}, [][]any{
+		{int64(1), "this row is bigger than the limit"},
+		{int64(2), "ok"},
+	})
+
+	var sizes []int
+	err := client.StreamRows(context.Background(), "documents", 100, 8, nil, func(batch RowBatch) error {
+		sizes = append(sizes, len(batch.Rows))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamRows() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(sizes, []int{1, 1}) {
+		t.Fatalf("batch sizes = %#v, want %#v", sizes, []int{1, 1})
+	}
+}
+
+func TestInsertableColumnsSkipsGeneratedColumns(t *testing.T) {
+	client := &SourceClient{
+		db: fakeQueryer{
+			query: func(ctx context.Context, query string, args ...any) (rowSet, error) {
+				return &fakeRows{
+					columns: []string{"column_name", "extra"},
+					rows: [][]any{
+						{"id", ""},
+						{"full_name", "VIRTUAL GENERATED"},
+						{"stored_total", "STORED GENERATED"},
+						{"name", ""},
+					},
+				}, nil
+			},
+		},
+		database: "app",
+	}
+
+	columns, err := client.InsertableColumns(context.Background(), "users")
+	if err != nil {
+		t.Fatalf("InsertableColumns() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(columns, []string{"id", "name"}) {
+		t.Fatalf("columns = %#v", columns)
+	}
+}
+
+func TestStreamRowsSelectsInsertableColumns(t *testing.T) {
+	var dataQuery string
+	client := &SourceClient{
+		db: fakeQueryer{
+			query: func(ctx context.Context, query string, args ...any) (rowSet, error) {
+				if strings.Contains(query, "information_schema.columns") {
+					return &fakeRows{
+						columns: []string{"column_name", "extra"},
+						rows: [][]any{
+							{"id", ""},
+							{"name", ""},
+							{"search", "VIRTUAL GENERATED"},
+						},
+					}, nil
+				}
+				dataQuery = query
+				return &fakeRows{
+					columns: []string{"id", "name"},
+					rows:    [][]any{{int64(1), "alice"}},
+				}, nil
+			},
+		},
+		database: "app",
+	}
+
+	err := client.StreamRows(context.Background(), "users", 100, 1024, nil, func(batch RowBatch) error {
+		if !reflect.DeepEqual(batch.Columns, []string{"id", "name"}) {
+			t.Fatalf("batch.Columns = %#v", batch.Columns)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamRows() error = %v", err)
+	}
+
+	if dataQuery != "SELECT `id`, `name` FROM `users`" {
+		t.Fatalf("data query = %q", dataQuery)
+	}
+}
+
 func TestClose(t *testing.T) {
 	closed := false
 	client := &SourceClient{
@@ -334,6 +469,50 @@ func TestClose(t *testing.T) {
 
 	if !closed {
 		t.Fatal("Close() did not call close function")
+	}
+}
+
+func BenchmarkScanRow(b *testing.B) {
+	rows := &fakeRows{
+		columns: []string{"id", "name", "body"},
+		rows: [][]any{
+			{int64(1), []byte("alice"), strings.Repeat("x", 128)},
+		},
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		rows.index = 0
+		if !rows.Next() {
+			b.Fatal("rows.Next() = false")
+		}
+		if _, err := scanRow(rows, len(rows.columns)); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func sourceClientWithRows(columns []string, rows [][]any) *SourceClient {
+	return &SourceClient{
+		db: fakeQueryer{
+			query: func(ctx context.Context, query string, args ...any) (rowSet, error) {
+				if strings.Contains(query, "information_schema.columns") {
+					columnRows := make([][]any, len(columns))
+					for i, column := range columns {
+						columnRows[i] = []any{column, ""}
+					}
+					return &fakeRows{
+						columns: []string{"column_name", "extra"},
+						rows:    columnRows,
+					}, nil
+				}
+				return &fakeRows{
+					columns: columns,
+					rows:    rows,
+				}, nil
+			},
+		},
+		database: "app",
 	}
 }
 
@@ -396,7 +575,13 @@ func (r *fakeRows) Scan(dest ...any) error {
 	for i := range dest {
 		switch ptr := dest[i].(type) {
 		case *any:
-			*ptr = row[i]
+			if bytes, ok := row[i].([]byte); ok {
+				cloned := make([]byte, len(bytes))
+				copy(cloned, bytes)
+				*ptr = cloned
+			} else {
+				*ptr = row[i]
+			}
 		case *string:
 			value, _ := row[i].(string)
 			*ptr = value

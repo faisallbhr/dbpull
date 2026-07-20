@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"dbpull/internal/db"
 )
@@ -19,6 +21,7 @@ func TestDataSyncerSync(t *testing.T) {
 				ctx context.Context,
 				table string,
 				batchSize int,
+				maxBatchBytes int,
 				notice db.BatchSizeNotice,
 				handle db.RowBatchHandler,
 			) error {
@@ -41,7 +44,7 @@ func TestDataSyncerSync(t *testing.T) {
 				return nil
 			},
 		},
-		fakeDataTarget{
+		&fakeDataTarget{
 			insertBatch: func(ctx context.Context, table string, batch db.RowBatch) error {
 				inserted = append(inserted, table)
 				return nil
@@ -57,7 +60,7 @@ func TestDataSyncerSync(t *testing.T) {
 			{Name: "users"},
 			{Name: "products"},
 		},
-	}, 2)
+	}, 2, 1024, 20, 1)
 	if err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
@@ -100,6 +103,7 @@ func TestDataSyncerStopsOnFirstError(t *testing.T) {
 				ctx context.Context,
 				table string,
 				batchSize int,
+				maxBatchBytes int,
 				notice db.BatchSizeNotice,
 				handle db.RowBatchHandler,
 			) error {
@@ -110,7 +114,7 @@ func TestDataSyncerStopsOnFirstError(t *testing.T) {
 				})
 			},
 		},
-		fakeDataTarget{
+		&fakeDataTarget{
 			insertBatch: func(ctx context.Context, table string, batch db.RowBatch) error {
 				return wantErr
 			},
@@ -123,7 +127,7 @@ func TestDataSyncerStopsOnFirstError(t *testing.T) {
 			{Name: "users"},
 			{Name: "products"},
 		},
-	}, 1)
+	}, 1, 1024, 20, 1)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Sync() error = %v, want %v", err, wantErr)
 	}
@@ -142,6 +146,7 @@ func TestDataSyncerReportsBatchSizeReduction(t *testing.T) {
 				ctx context.Context,
 				table string,
 				batchSize int,
+				maxBatchBytes int,
 				notice db.BatchSizeNotice,
 				handle db.RowBatchHandler,
 			) error {
@@ -157,7 +162,7 @@ func TestDataSyncerReportsBatchSizeReduction(t *testing.T) {
 				})
 			},
 		},
-		fakeDataTarget{},
+		&fakeDataTarget{},
 		func(update DataProgress) {
 			progress = append(progress, update)
 		},
@@ -165,7 +170,7 @@ func TestDataSyncerReportsBatchSizeReduction(t *testing.T) {
 
 	err := syncer.Sync(context.Background(), SyncPlan{
 		Tables: []PlanTable{{Name: "omni_sales_orders"}},
-	}, 1000)
+	}, 1000, 1024, 20, 1)
 	if err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
@@ -192,6 +197,7 @@ func TestDataSyncerSkipsExcludedData(t *testing.T) {
 				ctx context.Context,
 				table string,
 				batchSize int,
+				maxBatchBytes int,
 				notice db.BatchSizeNotice,
 				handle db.RowBatchHandler,
 			) error {
@@ -199,7 +205,7 @@ func TestDataSyncerSkipsExcludedData(t *testing.T) {
 				return nil
 			},
 		},
-		fakeDataTarget{},
+		&fakeDataTarget{},
 		func(update DataProgress) {
 			progress = append(progress, update)
 		},
@@ -207,7 +213,7 @@ func TestDataSyncerSkipsExcludedData(t *testing.T) {
 
 	err := syncer.Sync(context.Background(), SyncPlan{
 		Tables: []PlanTable{{Name: "audits", DataExcluded: true}},
-	}, 1000)
+	}, 1000, 1024, 20, 1)
 	if err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
@@ -221,30 +227,225 @@ func TestDataSyncerSkipsExcludedData(t *testing.T) {
 	}
 }
 
+func TestDataSyncerCommitsEveryNBatchAndRemainder(t *testing.T) {
+	target := &fakeDataTarget{}
+	syncer := NewDataSyncer(
+		fakeDataSource{
+			streamRows: func(ctx context.Context, table string, batchSize int, maxBatchBytes int, notice db.BatchSizeNotice, handle db.RowBatchHandler) error {
+				for i := 0; i < 5; i++ {
+					if err := handle(db.RowBatch{Columns: []string{"id"}, Rows: [][]any{{int64(i)}}}); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
+		target,
+		nil,
+	)
+
+	err := syncer.Sync(context.Background(), SyncPlan{Tables: []PlanTable{{Name: "users"}}}, 1, 1024, 2, 1)
+	if err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if target.commits != 3 {
+		t.Fatalf("commits = %d, want 3", target.commits)
+	}
+	if target.rollbacks != 0 {
+		t.Fatalf("rollbacks = %d, want 0", target.rollbacks)
+	}
+}
+
+func TestDataSyncerRollsBackOnInsertError(t *testing.T) {
+	wantErr := errors.New("insert failed")
+	target := &fakeDataTarget{
+		insertBatch: func(ctx context.Context, table string, batch db.RowBatch) error {
+			return wantErr
+		},
+	}
+	syncer := NewDataSyncer(
+		fakeDataSource{
+			streamRows: func(ctx context.Context, table string, batchSize int, maxBatchBytes int, notice db.BatchSizeNotice, handle db.RowBatchHandler) error {
+				return handle(db.RowBatch{Columns: []string{"id"}, Rows: [][]any{{int64(1)}}})
+			},
+		},
+		target,
+		nil,
+	)
+
+	err := syncer.Sync(context.Background(), SyncPlan{Tables: []PlanTable{{Name: "users"}}}, 1, 1024, 20, 1)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Sync() error = %v, want %v", err, wantErr)
+	}
+	if target.rollbacks != 1 {
+		t.Fatalf("rollbacks = %d, want 1", target.rollbacks)
+	}
+}
+
+func TestDataSyncerRollsBackOnContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	target := &fakeDataTarget{}
+	syncer := NewDataSyncer(
+		fakeDataSource{
+			streamRows: func(ctx context.Context, table string, batchSize int, maxBatchBytes int, notice db.BatchSizeNotice, handle db.RowBatchHandler) error {
+				if err := handle(db.RowBatch{Columns: []string{"id"}, Rows: [][]any{{int64(1)}}}); err != nil {
+					return err
+				}
+				cancel()
+				return ctx.Err()
+			},
+		},
+		target,
+		nil,
+	)
+
+	err := syncer.Sync(ctx, SyncPlan{Tables: []PlanTable{{Name: "users"}}}, 1, 1024, 20, 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Sync() error = %v, want context.Canceled", err)
+	}
+	if target.rollbacks != 1 {
+		t.Fatalf("rollbacks = %d, want 1", target.rollbacks)
+	}
+}
+
+func TestDataSyncerProcessesTablesWithLimitedWorkers(t *testing.T) {
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	seen := map[string]bool{}
+
+	syncer := NewDataSyncer(
+		fakeDataSource{
+			streamRows: func(ctx context.Context, table string, batchSize int, maxBatchBytes int, notice db.BatchSizeNotice, handle db.RowBatchHandler) error {
+				mu.Lock()
+				active++
+				if active > maxActive {
+					maxActive = active
+				}
+				seen[table] = true
+				mu.Unlock()
+
+				time.Sleep(10 * time.Millisecond)
+				err := handle(db.RowBatch{Columns: []string{"id"}, Rows: [][]any{{int64(1)}}})
+
+				mu.Lock()
+				active--
+				mu.Unlock()
+				return err
+			},
+		},
+		&fakeDataTarget{},
+		nil,
+	)
+
+	err := syncer.Sync(context.Background(), SyncPlan{Tables: []PlanTable{{Name: "a"}, {Name: "b"}, {Name: "c"}}}, 1, 1024, 20, 2)
+	if err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if maxActive != 2 {
+		t.Fatalf("maxActive = %d, want 2", maxActive)
+	}
+	if len(seen) != 3 {
+		t.Fatalf("seen = %#v", seen)
+	}
+}
+
+func TestDataSyncerCancelsWorkersOnFirstError(t *testing.T) {
+	wantErr := errors.New("boom")
+	started := make(chan string, 2)
+	release := make(chan struct{})
+
+	syncer := NewDataSyncer(
+		fakeDataSource{
+			streamRows: func(ctx context.Context, table string, batchSize int, maxBatchBytes int, notice db.BatchSizeNotice, handle db.RowBatchHandler) error {
+				started <- table
+				if table == "bad" {
+					return wantErr
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-release:
+					return nil
+				}
+			},
+		},
+		&fakeDataTarget{},
+		nil,
+	)
+	defer close(release)
+
+	err := syncer.Sync(context.Background(), SyncPlan{Tables: []PlanTable{{Name: "slow"}, {Name: "bad"}, {Name: "never"}}}, 1, 1024, 20, 2)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Sync() error = %v, want %v", err, wantErr)
+	}
+	if len(started) != 2 {
+		t.Fatalf("started workers = %d, want 2", len(started))
+	}
+}
+
 type fakeDataSource struct {
-	streamRows func(context.Context, string, int, db.BatchSizeNotice, db.RowBatchHandler) error
+	streamRows func(context.Context, string, int, int, db.BatchSizeNotice, db.RowBatchHandler) error
 }
 
 func (f fakeDataSource) StreamRows(
 	ctx context.Context,
 	table string,
 	batchSize int,
+	maxBatchBytes int,
 	notice db.BatchSizeNotice,
 	handle db.RowBatchHandler,
 ) error {
 	if f.streamRows != nil {
-		return f.streamRows(ctx, table, batchSize, notice, handle)
+		return f.streamRows(ctx, table, batchSize, maxBatchBytes, notice, handle)
 	}
 	return nil
 }
 
 type fakeDataTarget struct {
 	insertBatch func(context.Context, string, db.RowBatch) error
+	commits     int
+	rollbacks   int
+	mu          sync.Mutex
 }
 
-func (f fakeDataTarget) InsertBatch(ctx context.Context, table string, batch db.RowBatch) error {
-	if f.insertBatch != nil {
-		return f.insertBatch(ctx, table, batch)
+func (f *fakeDataTarget) NewSession(ctx context.Context) (db.DataSession, error) {
+	return &fakeDataSession{target: f}, nil
+}
+
+type fakeDataSession struct {
+	target *fakeDataTarget
+}
+
+func (s *fakeDataSession) BeginTx(ctx context.Context) (db.DataTx, error) {
+	return &fakeDataTx{target: s.target}, nil
+}
+
+func (s *fakeDataSession) Close(ctx context.Context) error {
+	return nil
+}
+
+type fakeDataTx struct {
+	target *fakeDataTarget
+}
+
+func (tx *fakeDataTx) InsertBatch(ctx context.Context, table string, batch db.RowBatch) error {
+	if tx.target.insertBatch != nil {
+		return tx.target.insertBatch(ctx, table, batch)
 	}
+	return nil
+}
+
+func (tx *fakeDataTx) Commit() error {
+	tx.target.mu.Lock()
+	defer tx.target.mu.Unlock()
+	tx.target.commits++
+	return nil
+}
+
+func (tx *fakeDataTx) Rollback() error {
+	tx.target.mu.Lock()
+	defer tx.target.mu.Unlock()
+	tx.target.rollbacks++
 	return nil
 }

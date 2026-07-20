@@ -56,9 +56,77 @@ sync:
 	if cfg.Sync.BatchSize != defaultBatchSize {
 		t.Fatalf("Sync.BatchSize = %d, want %d", cfg.Sync.BatchSize, defaultBatchSize)
 	}
+	if cfg.Sync.Workers != defaultWorkers {
+		t.Fatalf("Sync.Workers = %d, want %d", cfg.Sync.Workers, defaultWorkers)
+	}
+	if cfg.Sync.TransactionBatches != defaultTransactionBatches {
+		t.Fatalf("Sync.TransactionBatches = %d, want %d", cfg.Sync.TransactionBatches, defaultTransactionBatches)
+	}
+	if cfg.Sync.MaxBatchBytes != defaultMaxBatchBytes {
+		t.Fatalf("Sync.MaxBatchBytes = %d, want %d", cfg.Sync.MaxBatchBytes, defaultMaxBatchBytes)
+	}
 
 	if got, want := cfg.Sync.ExcludeData, []string{"failed_jobs", "*_logs"}; !slicesEqual(got, want) {
 		t.Fatalf("Sync.ExcludeData = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoadReadsManualAdvancedSyncConfig(t *testing.T) {
+	path := writeConfigFile(t, `
+source:
+  database: olshoperp
+  username: remote_db
+  password: source-secret
+ssh:
+  host: olshoperp.com
+  user: remote_db
+  private_key: ~/.ssh/id_rsa
+target:
+  host: localhost
+  database: olshoperp_local
+  username: root
+  password: target-secret
+sync:
+  workers: 4
+  transaction_batches: 7
+  max_batch_bytes: 1048576
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Sync.Workers != 4 || cfg.Sync.TransactionBatches != 7 || cfg.Sync.MaxBatchBytes != 1048576 {
+		t.Fatalf("Sync = %#v", cfg.Sync)
+	}
+}
+
+func TestLoadReturnsInvalidAdvancedSyncError(t *testing.T) {
+	path := writeConfigFile(t, `
+source:
+  database: olshoperp
+  username: remote_db
+  password: source-secret
+ssh:
+  host: olshoperp.com
+  user: remote_db
+  private_key: ~/.ssh/id_rsa
+target:
+  host: localhost
+  database: olshoperp_local
+  username: root
+  password: target-secret
+sync:
+  workers: 0
+`)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), `invalid value for "sync.workers": must be greater than 0`) {
+		t.Fatalf("Load() error = %q", err)
 	}
 }
 

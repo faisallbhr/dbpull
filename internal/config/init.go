@@ -25,7 +25,9 @@ func save(path string, cfg Config, createParent bool) (Config, string, error) {
 		}
 	}
 
-	data, err := yaml.Marshal(prepared)
+	existingSyncFields := readExistingSyncFields(path)
+	fileConfig := configForSave(cfg, prepared, existingSyncFields)
+	data, err := yaml.Marshal(fileConfig)
 	if err != nil {
 		return Config{}, "", fmt.Errorf("generate config file %q: %w", path, err)
 	}
@@ -77,6 +79,43 @@ func save(path string, cfg Config, createParent bool) (Config, string, error) {
 	}
 
 	return loaded, absPath, nil
+}
+
+func configForSave(original Config, prepared Config, existingSyncFields map[string]struct{}) Config {
+	if (original.Sync.Workers == 0 || original.Sync.Workers == defaultWorkers) && !syncFieldExists(existingSyncFields, "workers") {
+		prepared.Sync.Workers = 0
+	}
+	if (original.Sync.TransactionBatches == 0 || original.Sync.TransactionBatches == defaultTransactionBatches) && !syncFieldExists(existingSyncFields, "transaction_batches") {
+		prepared.Sync.TransactionBatches = 0
+	}
+	if (original.Sync.MaxBatchBytes == 0 || original.Sync.MaxBatchBytes == defaultMaxBatchBytes) && !syncFieldExists(existingSyncFields, "max_batch_bytes") {
+		prepared.Sync.MaxBatchBytes = 0
+	}
+	return prepared
+}
+
+func readExistingSyncFields(path string) map[string]struct{} {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	var root struct {
+		Sync map[string]any `yaml:"sync"`
+	}
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil
+	}
+	fields := make(map[string]struct{}, len(root.Sync))
+	for name := range root.Sync {
+		fields[name] = struct{}{}
+	}
+	return fields
+}
+
+func syncFieldExists(fields map[string]struct{}, name string) bool {
+	_, ok := fields[name]
+	return ok
 }
 
 func DefaultInitConfig() Config {
