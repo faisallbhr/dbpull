@@ -157,6 +157,10 @@ func (doctorTargetStub) PrepareSyncSession(ctx context.Context) error {
 	return nil
 }
 
+func (doctorTargetStub) CloseSyncSession(ctx context.Context) error {
+	return nil
+}
+
 func (doctorTargetStub) DropTable(ctx context.Context, table string) error {
 	return nil
 }

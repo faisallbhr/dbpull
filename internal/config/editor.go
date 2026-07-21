@@ -27,6 +27,8 @@ const (
 	menuCancel       = "cancel"
 	menuExcludeTable = "exclude_tables"
 	menuExcludeData  = "exclude_data"
+
+	maxPatternPreview = 8
 )
 
 type EditorOptions struct {
@@ -351,10 +353,18 @@ func patternListTitle(title string, items []string) string {
 		return builder.String()
 	}
 
-	for _, item := range items {
+	preview := items
+	if len(preview) > maxPatternPreview {
+		preview = preview[:maxPatternPreview]
+	}
+	for _, item := range preview {
 		builder.WriteString("\n\n")
 		builder.WriteString("✓ ")
 		builder.WriteString(item)
+	}
+	if hidden := len(items) - len(preview); hidden > 0 {
+		builder.WriteString("\n\n")
+		builder.WriteString(fmt.Sprintf("... and %d more", hidden))
 	}
 
 	return builder.String()

@@ -301,6 +301,7 @@ func buildSourceDSN(cfg config.SourceConfig, tunnelAddr string) (string, error) 
 		Addr:                 tunnelAddr,
 		DBName:               cfg.Database,
 		AllowNativePasswords: true,
+		InterpolateParams:    true,
 		ParseTime:            true,
 	}
 

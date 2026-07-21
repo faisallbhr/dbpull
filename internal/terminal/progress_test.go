@@ -60,6 +60,33 @@ func TestRendererSixThirtySevenOfSixSeventyOne(t *testing.T) {
 	}
 }
 
+func TestRendererDataCompleteForcesHundredPercent(t *testing.T) {
+	renderer, out, clock, ticker := newTestRenderer(false, true)
+	mustNoError(t, renderer.Start())
+	mustNoError(t, renderer.StartPhase(PhaseData))
+	mustNoError(t, renderer.SetPlan(syncpkg.SyncPlan{Tables: makePlanTables(4)}))
+	mustNoError(t, renderer.Handle(syncpkg.DataProgress{
+		Kind:       syncpkg.DataProgressTableComplete,
+		TableIndex: 4,
+		TotalRows:  10,
+	}))
+	mustNoError(t, renderer.Handle(syncpkg.DataProgress{
+		Kind:       syncpkg.DataProgressTableComplete,
+		TableIndex: 2,
+		TotalRows:  20,
+	}))
+	mustNoError(t, renderer.CompletePhase(PhaseData))
+
+	*clock = clock.Add(10 * time.Second)
+	advanceTick(ticker, *clock)
+	mustNoError(t, renderer.Close())
+
+	text := out.String()
+	if !strings.Contains(text, "100%") || !strings.Contains(text, "4 / 4 tables") {
+		t.Fatalf("output = %q", text)
+	}
+}
+
 func TestRendererFixedHeight(t *testing.T) {
 	renderer, _, _, _ := newTestRenderer(false, true)
 	mustNoError(t, renderer.Start())

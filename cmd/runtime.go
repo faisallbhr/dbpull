@@ -35,6 +35,7 @@ type targetClient interface {
 	Close() error
 	Ping(ctx context.Context) error
 	PrepareSyncSession(ctx context.Context) error
+	CloseSyncSession(ctx context.Context) error
 	DropTable(ctx context.Context, table string) error
 	CreateTable(ctx context.Context, createSQL string) error
 	InsertBatch(ctx context.Context, table string, batch db.RowBatch) error

@@ -212,6 +212,7 @@ func (s *DataSyncer) syncTable(
 
 	batchNumber := 0
 	batchesInTx := 0
+	pendingRows := int64(0)
 	var tx db.DataTx
 
 	rollback := func() error {
@@ -219,6 +220,7 @@ func (s *DataSyncer) syncTable(
 			err := tx.Rollback()
 			tx = nil
 			batchesInTx = 0
+			pendingRows = 0
 			if err != nil {
 				return fmt.Errorf("rollback target transaction for %q after batch %d: %w", table.Name, batchNumber, err)
 			}
@@ -234,6 +236,17 @@ func (s *DataSyncer) syncTable(
 		}
 		tx = nil
 		batchesInTx = 0
+		tableRows += pendingRows
+		addRows(pendingRows)
+		pendingRows = 0
+		progress(DataProgress{
+			Kind:        DataProgressTableProgress,
+			Table:       table.Name,
+			TableIndex:  index + 1,
+			TotalTables: totalTables,
+			TableRows:   tableRows,
+			BatchNumber: batchNumber,
+		})
 		return nil
 	}
 
@@ -281,18 +294,7 @@ func (s *DataSyncer) syncTable(
 			}
 
 			batchesInTx++
-			batchRows := int64(len(batch.Rows))
-			tableRows += batchRows
-			addRows(batchRows)
-
-			progress(DataProgress{
-				Kind:        DataProgressTableProgress,
-				Table:       table.Name,
-				TableIndex:  index + 1,
-				TotalTables: totalTables,
-				TableRows:   tableRows,
-				BatchNumber: batchNumber,
-			})
+			pendingRows += int64(len(batch.Rows))
 
 			if batchesInTx == transactionBatches {
 				if err := commit(); err != nil {

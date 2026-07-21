@@ -331,6 +331,7 @@ On load or save:
 - batch size
 - exclude tables list editor
 - exclude data list editor
+- long exclude lists are summarized so editor actions remain visible
 
 Advanced performance fields (`workers`, `transaction_batches`, `max_batch_bytes`) are YAML-only. They are validated when present, but are not shown in `dbpull init` or `dbpull config`.
 
@@ -693,6 +694,12 @@ effectiveBatchSize >= 1
 - large JSON, TEXT, and BLOB values should not force unbounded batch memory
 
 If MySQL rejects a multi-row insert because the packet is too large, DBPull splits that batch in half and retries. A single row that still fails returns an actionable `max_allowed_packet` error.
+
+### Tuning rules
+
+- source and target DSNs interpolate query parameters client-side to reduce prepared statement overhead
+- row progress is counted after transaction commit, not after insert, so rollback does not over-report copied rows
+- schema sync closes its dedicated target session before data workers start
 
 ### Value preservation rules
 

@@ -132,6 +132,9 @@ func runSync(cmd *cobra.Command, args []string, verbose bool) (err error) {
 	if err := renderer.CompletePhase(terminal.PhaseSchema); err != nil {
 		return err
 	}
+	if err := targetClient.CloseSyncSession(ctx); err != nil {
+		return fmt.Errorf("close schema sync session: %w", err)
+	}
 
 	if err := renderer.StartPhase(terminal.PhaseData); err != nil {
 		return err

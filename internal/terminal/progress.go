@@ -221,6 +221,9 @@ func (r *SyncProgressRenderer) handleCommand(state rendererState, command render
 		return r.render(state, true, false)
 	case commandCompletePhase:
 		state.phases[command.phase] = phaseDone
+		if command.phase == PhaseData && state.totalTables > 0 {
+			state.completedTables = state.totalTables
+		}
 		return r.render(state, true, false)
 	case commandSetPlan:
 		state.totalTables = len(command.plan.Tables)
@@ -301,21 +304,21 @@ func (r *SyncProgressRenderer) handleProgress(state rendererState, update syncpk
 		return r.render(state, true, false)
 	case syncpkg.DataProgressTableProgress:
 		state = r.updateProgressState(state, update)
-		state.completedTables = maxInt(update.TableIndex-1, 0)
+		state.completedTables = maxInt(state.completedTables, maxInt(update.TableIndex-1, 0))
 		return state, false, nil
 	case syncpkg.DataProgressTableComplete, syncpkg.DataProgressDataExcluded:
 		state = r.updateProgressState(state, update)
-		state.completedTables = update.TableIndex
+		state.completedTables = maxInt(state.completedTables, update.TableIndex)
 		return state, false, nil
 	case syncpkg.DataProgressTableStart:
 		if update.TableIndex > 0 {
-			state.completedTables = maxInt(update.TableIndex-1, 0)
+			state.completedTables = maxInt(state.completedTables, maxInt(update.TableIndex-1, 0))
 		}
 		state.copiedRows = update.TotalRows
 		return state, false, nil
 	case syncpkg.DataProgressTableFailed:
 		state = r.updateProgressState(state, update)
-		state.completedTables = maxInt(update.TableIndex-1, 0)
+		state.completedTables = maxInt(state.completedTables, maxInt(update.TableIndex-1, 0))
 		return state, false, nil
 	default:
 		return state, false, nil

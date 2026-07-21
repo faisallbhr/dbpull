@@ -27,6 +27,7 @@ func TestBuildTargetDSN(t *testing.T) {
 
 	for _, want := range []string{
 		"root:secret@tcp(localhost:3306)/olshoperp_local",
+		"interpolateParams=true",
 		"parseTime=true",
 	} {
 		if !strings.Contains(dsn, want) {
@@ -366,6 +367,45 @@ func TestCloseRestoresForeignKeysAndSQLMode(t *testing.T) {
 	}
 	if !sessionClosed || !dbClosed {
 		t.Fatalf("sessionClosed = %v, dbClosed = %v", sessionClosed, dbClosed)
+	}
+}
+
+func TestCloseSyncSessionReleasesSchemaSession(t *testing.T) {
+	var queries []string
+	closed := false
+
+	client := &TargetClient{
+		session: fakeTargetSession{
+			exec: func(ctx context.Context, query string, args ...any) (sql.Result, error) {
+				queries = append(queries, query)
+				return fakeResult{}, nil
+			},
+		},
+		closeSes: func() error {
+			closed = true
+			return nil
+		},
+		originalSQLMode:          "STRICT_TRANS_TABLES",
+		foreignKeyChecksDisabled: true,
+		syncPrepared:             true,
+	}
+
+	if err := client.CloseSyncSession(context.Background()); err != nil {
+		t.Fatalf("CloseSyncSession() error = %v", err)
+	}
+
+	wantQueries := []string{
+		"SET FOREIGN_KEY_CHECKS = 1",
+		"SET SESSION sql_mode = ?",
+	}
+	if !reflect.DeepEqual(queries, wantQueries) {
+		t.Fatalf("queries = %#v, want %#v", queries, wantQueries)
+	}
+	if !closed {
+		t.Fatal("session was not closed")
+	}
+	if client.session != nil || client.closeSes != nil || client.syncPrepared {
+		t.Fatalf("client kept schema session state: %#v", client)
 	}
 }
 

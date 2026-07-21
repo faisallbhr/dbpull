@@ -256,6 +256,43 @@ func TestDataSyncerCommitsEveryNBatchAndRemainder(t *testing.T) {
 	}
 }
 
+func TestDataSyncerReportsOnlyCommittedRows(t *testing.T) {
+	var progress []DataProgress
+	syncer := NewDataSyncer(
+		fakeDataSource{
+			streamRows: func(ctx context.Context, table string, batchSize int, maxBatchBytes int, notice db.BatchSizeNotice, handle db.RowBatchHandler) error {
+				for i := 0; i < 3; i++ {
+					if err := handle(db.RowBatch{Columns: []string{"id"}, Rows: [][]any{{int64(i)}}}); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
+		&fakeDataTarget{},
+		func(update DataProgress) {
+			if update.Kind == DataProgressTableProgress {
+				progress = append(progress, update)
+			}
+		},
+	)
+
+	err := syncer.Sync(context.Background(), SyncPlan{Tables: []PlanTable{{Name: "users"}}}, 1, 1024, 2, 1)
+	if err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+
+	wantRows := []int64{2, 3}
+	if len(progress) != len(wantRows) {
+		t.Fatalf("len(progress) = %d, want %d: %#v", len(progress), len(wantRows), progress)
+	}
+	for i, want := range wantRows {
+		if progress[i].TableRows != want || progress[i].TotalRows != want {
+			t.Fatalf("progress[%d] = %#v, want committed rows %d", i, progress[i], want)
+		}
+	}
+}
+
 func TestDataSyncerRollsBackOnInsertError(t *testing.T) {
 	wantErr := errors.New("insert failed")
 	target := &fakeDataTarget{

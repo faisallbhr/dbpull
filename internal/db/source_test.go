@@ -23,6 +23,7 @@ func TestBuildSourceDSN(t *testing.T) {
 
 	for _, want := range []string{
 		"remote_db:secret@tcp(127.0.0.1:4306)/olshoperp",
+		"interpolateParams=true",
 		"parseTime=true",
 	} {
 		if !strings.Contains(dsn, want) {

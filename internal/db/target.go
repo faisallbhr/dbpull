@@ -94,17 +94,7 @@ func ConnectTarget(cfg config.TargetConfig) (*TargetClient, error) {
 func (c *TargetClient) Close() error {
 	var err error
 
-	if c.syncPrepared {
-		if restoreErr := c.restoreSyncSession(context.Background()); restoreErr != nil {
-			err = restoreErr
-		}
-	}
-
-	if c.closeSes != nil {
-		if closeErr := c.closeSes(); closeErr != nil {
-			err = errorsJoin(err, fmt.Errorf("close target database session: %w", closeErr))
-		}
-	}
+	err = errorsJoin(err, c.CloseSyncSession(context.Background()))
 
 	if c.closeDB != nil {
 		if closeErr := c.closeDB(); closeErr != nil {
@@ -164,6 +154,24 @@ func (c *TargetClient) PrepareSyncSession(ctx context.Context) error {
 	c.foreignKeyChecksDisabled = true
 	c.syncPrepared = true
 	return nil
+}
+
+func (c *TargetClient) CloseSyncSession(ctx context.Context) error {
+	var err error
+
+	if c.syncPrepared {
+		err = errorsJoin(err, c.restoreSyncSession(ctx))
+	}
+
+	if c.closeSes != nil {
+		if closeErr := c.closeSes(); closeErr != nil {
+			err = errorsJoin(err, fmt.Errorf("close target database session: %w", closeErr))
+		}
+	}
+
+	c.session = nil
+	c.closeSes = nil
+	return err
 }
 
 func (c *TargetClient) NewSession(ctx context.Context) (DataSession, error) {
@@ -430,6 +438,7 @@ func buildTargetDSN(cfg config.TargetConfig) (string, error) {
 		Addr:                 addr,
 		DBName:               cfg.Database,
 		AllowNativePasswords: true,
+		InterpolateParams:    true,
 		ParseTime:            true,
 	}
 

@@ -173,6 +173,29 @@ func TestRunEditorExcludeDataAddRemove(t *testing.T) {
 	}
 }
 
+func TestPatternListTitleSummarizesLongLists(t *testing.T) {
+	items := []string{
+		"failed_jobs",
+		"jobs",
+		"job_batches",
+		"audits",
+		"telescope_*",
+		"audit_codes",
+		"*_export*",
+		"*_import*",
+		"*_log*",
+	}
+
+	title := patternListTitle("Exclude Data", items)
+
+	if strings.Contains(title, "*_log*") {
+		t.Fatalf("patternListTitle() showed hidden item:\n%s", title)
+	}
+	if !strings.Contains(title, "... and 1 more") {
+		t.Fatalf("patternListTitle() missing summary:\n%s", title)
+	}
+}
+
 func TestRunEditorDoesNotShowAdvancedSyncFields(t *testing.T) {
 	ui := newFakeUI(
 		[]string{menuSync, menuBack, menuExit},
