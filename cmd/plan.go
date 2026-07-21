@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	syncpkg "dbpull/internal/sync"
+	syncpkg "github.com/faisallbhr/dbpull/internal/sync"
 
 	"github.com/spf13/cobra"
 )

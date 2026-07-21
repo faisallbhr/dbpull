@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	syncpkg "dbpull/internal/sync"
+	syncpkg "github.com/faisallbhr/dbpull/internal/sync"
 )
 
 type fakeTicker struct {

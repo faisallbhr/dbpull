@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	syncpkg "dbpull/internal/sync"
+	syncpkg "github.com/faisallbhr/dbpull/internal/sync"
 
 	"golang.org/x/term"
 )

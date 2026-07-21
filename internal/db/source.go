@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"dbpull/internal/config"
+	"github.com/faisallbhr/dbpull/internal/config"
 
 	mysql "github.com/go-sql-driver/mysql"
 )

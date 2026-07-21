@@ -23,7 +23,7 @@ builds:
       - -buildvcs=false
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
-      - -s -w -X dbpull/internal/buildinfo.Version={{ .Tag }} -X dbpull/internal/buildinfo.Commit={{ .Commit }} -X dbpull/internal/buildinfo.BuildDate={{ .Date }}
+      - -s -w -X github.com/faisallbhr/dbpull/internal/buildinfo.Version={{ .Tag }} -X github.com/faisallbhr/dbpull/internal/buildinfo.Commit={{ .Commit }} -X github.com/faisallbhr/dbpull/internal/buildinfo.BuildDate={{ .Date }}
 
 archives:
   - id: dbpull

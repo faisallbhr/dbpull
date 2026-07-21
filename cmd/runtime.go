@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"dbpull/internal/config"
-	"dbpull/internal/db"
-	"dbpull/internal/ssh"
-	syncpkg "dbpull/internal/sync"
+	"github.com/faisallbhr/dbpull/internal/config"
+	"github.com/faisallbhr/dbpull/internal/db"
+	"github.com/faisallbhr/dbpull/internal/ssh"
+	syncpkg "github.com/faisallbhr/dbpull/internal/sync"
 )
 
 const (

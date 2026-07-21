@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"dbpull/internal/config"
+	"github.com/faisallbhr/dbpull/internal/config"
 )
 
 func TestRunInitReusesConfigEditor(t *testing.T) {

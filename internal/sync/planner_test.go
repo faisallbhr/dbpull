@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"dbpull/internal/config"
-	"dbpull/internal/db"
+	"github.com/faisallbhr/dbpull/internal/config"
+	"github.com/faisallbhr/dbpull/internal/db"
 )
 
 func TestPlannerBuild(t *testing.T) {

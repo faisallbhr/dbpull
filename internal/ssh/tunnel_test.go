@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"dbpull/internal/config"
+	"github.com/faisallbhr/dbpull/internal/config"
 
 	gossh "golang.org/x/crypto/ssh"
 )

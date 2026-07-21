@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"dbpull/internal/db"
+	"github.com/faisallbhr/dbpull/internal/db"
 )
 
 func TestDataSyncerSync(t *testing.T) {

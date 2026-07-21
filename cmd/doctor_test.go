@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"dbpull/internal/config"
-	"dbpull/internal/db"
-	"dbpull/internal/ssh"
+	"github.com/faisallbhr/dbpull/internal/config"
+	"github.com/faisallbhr/dbpull/internal/db"
+	"github.com/faisallbhr/dbpull/internal/ssh"
 )
 
 func TestDoctorSuccess(t *testing.T) {

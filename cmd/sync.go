@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	syncpkg "dbpull/internal/sync"
-	"dbpull/internal/terminal"
+	syncpkg "github.com/faisallbhr/dbpull/internal/sync"
+	"github.com/faisallbhr/dbpull/internal/terminal"
 
 	"github.com/spf13/cobra"
 )

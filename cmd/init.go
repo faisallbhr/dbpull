@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"dbpull/internal/config"
+	"github.com/faisallbhr/dbpull/internal/config"
 
 	"github.com/spf13/cobra"
 )

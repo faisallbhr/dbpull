@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/signal"
 
-	"dbpull/cmd"
+	"github.com/faisallbhr/dbpull/cmd"
 )
 
 func main() {

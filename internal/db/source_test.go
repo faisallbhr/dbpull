@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"dbpull/internal/config"
+	"github.com/faisallbhr/dbpull/internal/config"
 )
 
 func TestBuildSourceDSN(t *testing.T) {

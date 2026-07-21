@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"dbpull/internal/buildinfo"
+	"github.com/faisallbhr/dbpull/internal/buildinfo"
 
 	"github.com/spf13/cobra"
 )

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"dbpull/internal/db"
+	"github.com/faisallbhr/dbpull/internal/db"
 )
 
 type DataSyncer struct {

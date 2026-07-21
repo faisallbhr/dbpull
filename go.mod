@@ -1,4 +1,4 @@
-module dbpull
+module github.com/faisallbhr/dbpull
 
 go 1.26
 

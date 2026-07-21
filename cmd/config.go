@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"dbpull/internal/config"
+	"github.com/faisallbhr/dbpull/internal/config"
 
 	"github.com/spf13/cobra"
 )

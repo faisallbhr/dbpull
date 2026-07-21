@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"dbpull/internal/config"
-	"dbpull/internal/db"
+	"github.com/faisallbhr/dbpull/internal/config"
+	"github.com/faisallbhr/dbpull/internal/db"
 )
 
 type Planner struct {
