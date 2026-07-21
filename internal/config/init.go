@@ -9,6 +9,15 @@ import (
 )
 
 const defaultConfigFileName = "dbpull.yml"
+const defaultConfigDirName = "dbpull"
+
+func DefaultPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil || dir == "" {
+		return defaultConfigFileName
+	}
+	return filepath.Join(dir, defaultConfigDirName, defaultConfigFileName)
+}
 
 func save(path string, cfg Config, createParent bool) (Config, string, error) {
 	prepared, err := Prepare(cfg)
@@ -143,9 +152,9 @@ func DefaultInitConfig() Config {
 	}
 }
 
-func resolvePath(path string) string {
+func resolvePath(path string) (string, error) {
 	if path == "" {
-		return defaultConfigFileName
+		path = DefaultPath()
 	}
-	return path
+	return expandHome(path)
 }

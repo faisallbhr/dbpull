@@ -101,7 +101,7 @@ Why:
 
 Responsibility:
 
-- load `~/.config/dbpull/dbpull.yml` by default
+- load the OS-native user config path by default
 - apply defaults
 - expand `~` in `ssh.private_key`
 - validate required fields and numeric values
@@ -987,7 +987,7 @@ Used because one YAML file is enough for this CLI.
 The current DBPull design is intentionally boring:
 
 - one CLI
-- one default config file at `~/.config/dbpull/dbpull.yml`
+- one default config file in the OS-native user config directory
 - one tunnel
 - one source DB
 - one target DB

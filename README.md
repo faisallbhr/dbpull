@@ -41,7 +41,13 @@ dbpull sync
 
 ## Basic Configuration
 
-Configuration is stored in `~/.config/dbpull/dbpull.yml` by default. Use `--config /path/to/dbpull.yml` when you need a different file.
+Configuration is stored in the OS config directory by default:
+
+- Linux: `~/.config/dbpull/dbpull.yml`
+- macOS: `~/Library/Application Support/dbpull/dbpull.yml`
+- Windows: `%AppData%\dbpull\dbpull.yml`
+
+Use `--config /path/to/dbpull.yml` when you need a different file.
 
 ```yaml
 source:

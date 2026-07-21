@@ -63,7 +63,10 @@ func RunEditor(opts EditorOptions) (SessionResult, error) {
 }
 
 func runEditor(ui UI, opts EditorOptions) (SessionResult, error) {
-	path := resolvePath(opts.Path)
+	path, err := resolvePath(opts.Path)
+	if err != nil {
+		return SessionResult{}, fmt.Errorf("resolve config path: %w", err)
+	}
 
 	initial, loaded, err := loadInitialConfig(path, opts)
 	if err != nil {

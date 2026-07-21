@@ -1,11 +1,14 @@
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/faisallbhr/dbpull/internal/config"
+
+	"github.com/spf13/cobra"
+)
 
 const appName = "dbpull"
-const defaultConfigPath = "~/.config/dbpull/dbpull.yml"
 
-var configPath = defaultConfigPath
+var configPath = config.DefaultPath()
 
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -15,7 +18,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	cmd.PersistentFlags().StringVar(&configPath, "config", defaultConfigPath, "Path to DBPull config file")
+	cmd.PersistentFlags().StringVar(&configPath, "config", config.DefaultPath(), "Path to DBPull config file")
 
 	cmd.AddCommand(newInitCmd())
 	cmd.AddCommand(newConfigCmd())

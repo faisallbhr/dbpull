@@ -106,6 +106,34 @@ func TestRunEditorSave(t *testing.T) {
 	}
 }
 
+func TestResolvePathExpandsHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("os.UserHomeDir() error = %v", err)
+	}
+
+	got, err := resolvePath("~/dbpull.yml")
+	if err != nil {
+		t.Fatalf("resolvePath() error = %v", err)
+	}
+	want := filepath.Join(home, "dbpull.yml")
+	if got != want {
+		t.Fatalf("resolvePath() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultPathUsesUserConfigDir(t *testing.T) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Skipf("os.UserConfigDir() error = %v", err)
+	}
+
+	want := filepath.Join(dir, "dbpull", "dbpull.yml")
+	if got := DefaultPath(); got != want {
+		t.Fatalf("DefaultPath() = %q, want %q", got, want)
+	}
+}
+
 func TestRunEditorUnsavedChangesConfirmation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dbpull.yml")
 
