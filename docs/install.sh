@@ -131,19 +131,38 @@ add_to_path() {
 			'dbpull install: warning: custom install directory %s was not added to PATH automatically\n' \
 			"$dir" >&2
 		printf \
-			'Add it with: export PATH="%s:$PATH"\n' \
-			"$dir" >&2
+			'Add it manually to your PATH.\n' >&2
 		return
 	fi
 
+	case "${SHELL:-}" in
+		*/fish)
+			if command -v fish >/dev/null 2>&1; then
+				fish -c 'fish_add_path "$HOME/.local/bin"'
+				printf \
+					'dbpull install: added %s to Fish PATH\n' \
+					"$dir" >&2
+				printf \
+					'dbpull install: open a new terminal or run:\n  fish_add_path ~/.local/bin\n' \
+					>&2
+			else
+				err "Fish shell was detected but the fish command was not found"
+			fi
+			return
+			;;
+		*/zsh)
+			rc="$HOME/.zshrc"
+			;;
+		*/bash)
+			rc="$HOME/.bashrc"
+			;;
+		*)
+			rc="$HOME/.profile"
+			;;
+	esac
+
 	line='export PATH="$HOME/.local/bin:$PATH"'
 	marker="# added by dbpull installer"
-
-	case "${SHELL:-}" in
-		*/zsh) rc="$HOME/.zshrc" ;;
-		*/bash) rc="$HOME/.bashrc" ;;
-		*) rc="$HOME/.profile" ;;
-	esac
 
 	[ -f "$rc" ] || : >"$rc"
 
@@ -156,11 +175,11 @@ add_to_path() {
 		printf \
 			'dbpull install: added %s to PATH in %s\n' \
 			"$dir" "$rc" >&2
-
-		printf \
-			'dbpull install: run "source %s" or open a new terminal\n' \
-			"$rc" >&2
 	fi
+
+	printf \
+		'dbpull install: open a new terminal or run "source %s"\n' \
+		"$rc" >&2
 }
 
 need uname
