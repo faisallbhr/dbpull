@@ -1,0 +1,55 @@
+version: 2
+
+project_name: dbpull
+
+builds:
+  - id: dbpull
+    main: .
+    binary: dbpull
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w -X dbpull/internal/buildinfo.Version={{ .Tag }} -X dbpull/internal/buildinfo.Commit={{ .Commit }} -X dbpull/internal/buildinfo.BuildDate={{ .Date }}
+
+archives:
+  - id: dbpull
+    ids:
+      - dbpull
+    formats:
+      - tar.gz
+    name_template: "dbpull-{{ .Tag }}-{{ .Os }}-{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^build:"
+      - "^Merge "
