@@ -18,7 +18,13 @@ DBPull synchronizes a remote database to a local database by rebuilding the targ
 
 ## Installation
 
-Download the latest binary from **GitHub Releases**, or build from source:
+Install the latest release:
+
+```bash
+curl -fsSL https://faisallbhr.github.io/dbpull/install.sh | sh
+```
+
+You can also download a binary from **GitHub Releases**, or build from source:
 
 ```bash
 make build
@@ -35,7 +41,7 @@ dbpull sync
 
 ## Basic Configuration
 
-Configuration is stored in `dbpull.yml`.
+Configuration is stored in `~/.config/dbpull/dbpull.yml` by default. Use `--config /path/to/dbpull.yml` when you need a different file.
 
 ```yaml
 source:

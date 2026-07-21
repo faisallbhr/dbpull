@@ -17,14 +17,14 @@ func newInitCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Create an initial dbpull.yml configuration",
+		Short: "Create an initial DBPull configuration",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runInit(cmd, outputPath, force)
 		},
 	}
 
-	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Output path for the generated config file (default: dbpull.yml)")
+	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Output path for the generated config file")
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing config file")
 
 	return cmd
@@ -35,7 +35,7 @@ func runInit(cmd *cobra.Command, outputPath string, force bool) error {
 	explicitOutput := cmd.Flags().Changed("output")
 	if path == "" {
 		path = configPath
-		explicitOutput = cmd.Flag("config") != nil && cmd.Flag("config").Changed
+		explicitOutput = true
 	}
 
 	result, err := runConfigEditor(config.EditorOptions{

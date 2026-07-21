@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DBPull</title>
+    <meta name="description" content="Refresh your local database from a remote database over SSH with one command.">
+    <link rel="icon" type="image/png" href="./logo.png">
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <nav class="wrap" aria-label="Main navigation">
+        <div class="brand">
+          <img src="./logo.png" alt="" width="32" height="32">
+          <span>DBPull</span>
+        </div>
+        <div class="links">
+          <a href="https://github.com/faisallbhr/dbpull">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="wrap">
+      <section class="hero">
+        <div>
+          <h1>Refresh local databases over SSH.</h1>
+          <p class="lead">DBPull rebuilds your local schema, copies selected data, and keeps development databases close to staging without hand-written dump scripts.</p>
+          <div class="install" id="install" aria-label="Install command">
+            <code data-install-command>curl -fsSL https://faisallbhr.github.io/dbpull/install.sh | sh</code>
+            <button type="button" data-copy-command>Copy</button>
+          </div>
+          <p class="copy-status" data-copy-status aria-live="polite"></p>
+        </div>
+
+        <div class="terminal" aria-label="DBPull command preview">
+          <div class="terminal-bar" aria-hidden="true">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+          </div>
+          <pre><code>$ dbpull plan
+Tables to sync       112
+Schema only          9
+Excluded             7
+Target database      app_local
+
+No changes were made.
+
+$ dbpull sync
+DBPull Sync
+
+SSH ✓  Source ✓  Target ✓  Plan ✓  Schema ✓  Data ◌
+
+████████████████░░░░░░░░░░░░░░░░  50%
+56 / 112 tables
+1,248,000 rows copied · 12,400 rows/s
+Elapsed 1m12s · ETA 1m12s</code></pre>
+        </div>
+      </section>
+
+      <section class="grid" aria-label="Features">
+        <article class="feature">
+          <h2>SSH-first</h2>
+          <p>Connect to remote databases through an SSH tunnel without exposing database ports.</p>
+        </article>
+        <article class="feature">
+          <h2>Selective sync</h2>
+          <p>Exclude whole tables or copy schema only for noisy queues, audits, logs, and temporary data.</p>
+        </article>
+        <article class="feature">
+          <h2>Release binaries</h2>
+          <p>The installer downloads release artifacts and verifies SHA-256 checksums before installing.</p>
+        </article>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">MIT licensed. Built for local development workflows with MariaDB and MySQL.</div>
+    </footer>
+  </body>
+</html>

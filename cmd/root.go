@@ -3,7 +3,7 @@ package cmd
 import "github.com/spf13/cobra"
 
 const appName = "dbpull"
-const defaultConfigPath = "dbpull.yml"
+const defaultConfigPath = "~/.config/dbpull/dbpull.yml"
 
 var configPath = defaultConfigPath
 
@@ -15,7 +15,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	cmd.PersistentFlags().StringVar(&configPath, "config", defaultConfigPath, "Path to dbpull.yml")
+	cmd.PersistentFlags().StringVar(&configPath, "config", defaultConfigPath, "Path to DBPull config file")
 
 	cmd.AddCommand(newInitCmd())
 	cmd.AddCommand(newConfigCmd())

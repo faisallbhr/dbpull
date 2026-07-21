@@ -10,20 +10,37 @@ import (
 
 func TestRunInitReusesConfigEditor(t *testing.T) {
 	prev := runConfigEditor
-	t.Cleanup(func() { runConfigEditor = prev })
+	prevConfigPath := configPath
+	t.Cleanup(func() {
+		runConfigEditor = prev
+		configPath = prevConfigPath
+	})
 
 	called := false
 	runConfigEditor = func(opts config.EditorOptions) (config.SessionResult, error) {
 		called = true
+		if opts.Path != defaultConfigPath {
+			t.Fatalf("EditorOptions.Path = %q, want %q", opts.Path, defaultConfigPath)
+		}
+		if !opts.CreateParent {
+			t.Fatal("EditorOptions.CreateParent = false, want true")
+		}
 		return config.SessionResult{Saved: true, Path: opts.Path}, nil
 	}
 
+	configPath = defaultConfigPath
 	cmd := newInitCmd()
 	if err := runInit(cmd, "", false); err != nil {
 		t.Fatalf("runInit() error = %v", err)
 	}
 	if !called {
 		t.Fatal("runConfigEditor was not called")
+	}
+}
+
+func TestDefaultConfigPathUsesUserConfigDir(t *testing.T) {
+	if defaultConfigPath != "~/.config/dbpull/dbpull.yml" {
+		t.Fatalf("defaultConfigPath = %q", defaultConfigPath)
 	}
 }
 
