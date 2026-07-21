@@ -236,7 +236,7 @@ func TestRunEditorDoesNotShowAdvancedSyncFields(t *testing.T) {
 	}
 
 	got := strings.Join(ui.optionLabels, "\n")
-	for _, advanced := range []string{"workers", "transaction", "bytes", "packet"} {
+	for _, advanced := range []string{"batch", "workers", "transaction", "bytes", "packet"} {
 		if strings.Contains(strings.ToLower(got), advanced) {
 			t.Fatalf("advanced field %q shown in options:\n%s", advanced, got)
 		}
@@ -256,7 +256,7 @@ func TestSaveDoesNotWriteDefaultAdvancedFields(t *testing.T) {
 		t.Fatalf("os.ReadFile() error = %v", err)
 	}
 	text := string(data)
-	for _, field := range []string{"workers:", "transaction_batches:", "max_batch_bytes:"} {
+	for _, field := range []string{"batch_size:", "workers:", "transaction_batches:", "max_batch_bytes:"} {
 		if strings.Contains(text, field) {
 			t.Fatalf("config contains advanced field %q:\n%s", field, text)
 		}
@@ -301,7 +301,7 @@ sync:
 		t.Fatalf("os.ReadFile() error = %v", err)
 	}
 	text := string(data)
-	for _, field := range []string{"workers: 4", "transaction_batches: 10", "max_batch_bytes: 1048576"} {
+	for _, field := range []string{"batch_size: 1000", "workers: 4", "transaction_batches: 10", "max_batch_bytes: 1048576"} {
 		if !strings.Contains(text, field) {
 			t.Fatalf("config missing %q:\n%s", field, text)
 		}

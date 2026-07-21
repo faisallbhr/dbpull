@@ -91,6 +91,9 @@ func save(path string, cfg Config, createParent bool) (Config, string, error) {
 }
 
 func configForSave(original Config, prepared Config, existingSyncFields map[string]struct{}) Config {
+	if (original.Sync.BatchSize == 0 || original.Sync.BatchSize == defaultBatchSize) && !syncFieldExists(existingSyncFields, "batch_size") {
+		prepared.Sync.BatchSize = 0
+	}
 	if (original.Sync.Workers == 0 || original.Sync.Workers == defaultWorkers) && !syncFieldExists(existingSyncFields, "workers") {
 		prepared.Sync.Workers = 0
 	}
@@ -139,7 +142,6 @@ func DefaultInitConfig() Config {
 			Username: "root",
 		},
 		Sync: SyncConfig{
-			BatchSize: defaultBatchSize,
 			ExcludeData: []string{
 				"failed_jobs",
 				"jobs",

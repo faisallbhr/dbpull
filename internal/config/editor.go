@@ -270,7 +270,6 @@ func editTargetSection(ui UI, cfg *Config) error {
 func editSyncSection(ui UI, cfg *Config) error {
 	for {
 		choice, err := ui.Select("Synchronization", []MenuOption{
-			{Label: fmt.Sprintf("Batch Size (%d)", cfg.Sync.BatchSize), Value: "batch"},
 			{Label: "Exclude Tables", Value: menuExcludeTable},
 			{Label: "Exclude Data", Value: menuExcludeData},
 			{Label: "Back", Value: menuBack},
@@ -280,12 +279,6 @@ func editSyncSection(ui UI, cfg *Config) error {
 		}
 
 		switch choice {
-		case "batch":
-			value, err := ui.Input("Synchronization\n\nBatch Size", strconv.Itoa(cfg.Sync.BatchSize), false)
-			if err != nil {
-				return err
-			}
-			cfg.Sync.BatchSize = atoiOrZero(value)
 		case menuExcludeTable:
 			items, err := editPatternList(ui, "Exclude Tables", cfg.Sync.ExcludeTables)
 			if err != nil {

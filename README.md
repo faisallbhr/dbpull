@@ -60,12 +60,15 @@ target:
   ...
 
 sync:
-  batch_size: 10000
   exclude_tables:
     - cache
+    - tmp_*
+    - *_logs
 
   exclude_data:
     - audits
+    - sessions_*
+    - *_histories
 ```
 
 - `exclude_tables` skips the table completely.
@@ -78,11 +81,13 @@ Most users do not need to change these values. If needed, add them manually unde
 ```yaml
 sync:
   # Optional advanced settings
+  batch_size: 10000
   workers: 2
   transaction_batches: 20
   max_batch_bytes: 16777216
 ```
 
+- `batch_size`: max rows per insert batch before other limits. Default: `10000`.
 - `workers`: number of tables copied in parallel. Default: `2`. Use `1` for sequential data sync.
 - `transaction_batches`: commit after this many insert batches. Default: `20`.
 - `max_batch_bytes`: estimated max data size per batch before flushing. Default: `16777216` (16 MiB).

@@ -251,7 +251,6 @@ target:
   password: local_password
 
 sync:
-  batch_size: 10000
   exclude_tables: []
   exclude_data:
     - audits
@@ -266,7 +265,7 @@ sync:
 - `target.host`, `target.database`, `target.username`, `target.password` are required
 - `ssh.port` must be greater than `0`
 - `target.port` must be greater than `0`
-- `sync.batch_size` must be greater than `0`
+- `sync.batch_size`, when present, must be greater than `0`
 - `sync.workers`, when present, must be greater than `0`
 - `sync.transaction_batches`, when present, must be greater than `0`
 - `sync.max_batch_bytes`, when present, must be greater than `0`
@@ -328,12 +327,11 @@ On load or save:
 
 ### Synchronization section
 
-- batch size
 - exclude tables list editor
 - exclude data list editor
 - long exclude lists are summarized so editor actions remain visible
 
-Advanced performance fields (`workers`, `transaction_batches`, `max_batch_bytes`) are YAML-only. They are validated when present, but are not shown in `dbpull init` or `dbpull config`.
+Advanced performance fields (`batch_size`, `workers`, `transaction_batches`, `max_batch_bytes`) are YAML-only. They are validated when present, but are not shown in `dbpull init` or `dbpull config`.
 
 ### Why one editor
 

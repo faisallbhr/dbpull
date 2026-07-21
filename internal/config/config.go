@@ -52,13 +52,14 @@ type TargetConfig struct {
 }
 
 type SyncConfig struct {
-	BatchSize          int      `yaml:"batch_size"`
+	BatchSize          int      `yaml:"batch_size,omitempty"`
 	ExcludeTables      []string `yaml:"exclude_tables"`
 	ExcludeData        []string `yaml:"exclude_data"`
 	Workers            int      `yaml:"workers,omitempty"`
 	TransactionBatches int      `yaml:"transaction_batches,omitempty"`
 	MaxBatchBytes      int      `yaml:"max_batch_bytes,omitempty"`
 
+	batchSizeSet          bool
 	workersSet            bool
 	transactionBatchesSet bool
 	maxBatchBytesSet      bool
@@ -73,6 +74,8 @@ func (c *SyncConfig) UnmarshalYAML(value *yaml.Node) error {
 
 	for i := 0; i+1 < len(value.Content); i += 2 {
 		switch value.Content[i].Value {
+		case "batch_size":
+			cfg.batchSizeSet = true
 		case "workers":
 			cfg.workersSet = true
 		case "transaction_batches":
@@ -140,7 +143,7 @@ func validate(cfg Config) error {
 		return fmt.Errorf("invalid value for %q: must be greater than 0", "target.port")
 	}
 
-	if cfg.Sync.BatchSize <= 0 {
+	if cfg.Sync.batchSizeSet && cfg.Sync.BatchSize <= 0 {
 		return fmt.Errorf("invalid value for %q: must be greater than 0", "sync.batch_size")
 	}
 
@@ -168,7 +171,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Target.Port = defaultTargetPort
 	}
 
-	if cfg.Sync.BatchSize == 0 {
+	if cfg.Sync.BatchSize == 0 && !cfg.Sync.batchSizeSet {
 		cfg.Sync.BatchSize = defaultBatchSize
 	}
 
